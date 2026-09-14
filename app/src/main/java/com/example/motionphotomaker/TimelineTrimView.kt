@@ -22,18 +22,15 @@ class TimelineTrimView @JvmOverloads constructor(
     var durationMs: Long = 1L
         set(value) {
             field = value.coerceAtLeast(1L)
-            trimStartMs = trimStartMs.coerceIn(0L, field)
-            trimEndMs = trimEndMs.coerceIn(trimStartMs, field)
-            playheadMs = playheadMs.coerceIn(trimStartMs, trimEndMs)
+            selectedStartMs = selectedStartMs.coerceIn(0L, field)
+            selectedEndMs = selectedEndMs.coerceIn(selectedStartMs, field)
+            playheadMs = playheadMs.coerceIn(selectedStartMs, selectedEndMs)
             invalidate()
         }
 
-    var trimStartMs: Long = 0L
-        private set
-    var trimEndMs: Long = 1L
-        private set
-    var playheadMs: Long = 0L
-        private set
+    private var selectedStartMs: Long = 0L
+    private var selectedEndMs: Long = 1L
+    private var playheadMs: Long = 0L
 
     var onTrimChanged: ((Long, Long) -> Unit)? = null
     var onPlayheadChanged: ((Long, Boolean) -> Unit)? = null
@@ -67,15 +64,15 @@ class TimelineTrimView @JvmOverloads constructor(
     fun setTrim(startMs: Long, endMs: Long, notify: Boolean = false) {
         val s = startMs.coerceIn(0L, durationMs)
         val e = endMs.coerceIn(s + 1L, durationMs)
-        trimStartMs = s
-        trimEndMs = e
+        selectedStartMs = s
+        selectedEndMs = e
         playheadMs = playheadMs.coerceIn(s, e)
         invalidate()
-        if (notify) onTrimChanged?.invoke(trimStartMs, trimEndMs)
+        if (notify) onTrimChanged?.invoke(selectedStartMs, selectedEndMs)
     }
 
     fun setPlayhead(positionMs: Long) {
-        playheadMs = positionMs.coerceIn(trimStartMs, trimEndMs)
+        playheadMs = positionMs.coerceIn(selectedStartMs, selectedEndMs)
         invalidate()
     }
 
@@ -95,20 +92,36 @@ class TimelineTrimView @JvmOverloads constructor(
             }
         }
 
-        val startX = timeToX(trimStartMs)
-        val endX = timeToX(trimEndMs)
+        val startX = timeToX(selectedStartMs)
+        val endX = timeToX(selectedEndMs)
         if (startX > 0f) canvas.drawRect(0f, 0f, startX, h, shadePaint)
         if (endX < w) canvas.drawRect(endX, 0f, w, h, shadePaint)
         canvas.drawRect(startX, 0f, endX, h, selectionPaint)
 
-        canvas.drawRoundRect(startX - handleWidth / 2f, 0f, startX + handleWidth / 2f, h, 7f * density, 7f * density, handlePaint)
-        canvas.drawRoundRect(endX - handleWidth / 2f, 0f, endX + handleWidth / 2f, h, 7f * density, 7f * density, handlePaint)
+        canvas.drawRoundRect(
+            startX - handleWidth / 2f,
+            0f,
+            startX + handleWidth / 2f,
+            h,
+            7f * density,
+            7f * density,
+            handlePaint,
+        )
+        canvas.drawRoundRect(
+            endX - handleWidth / 2f,
+            0f,
+            endX + handleWidth / 2f,
+            h,
+            7f * density,
+            7f * density,
+            handlePaint,
+        )
 
         val playX = timeToX(playheadMs)
         canvas.drawRect(playX - playheadWidth, 0f, playX + playheadWidth, h, playheadPaint)
         canvas.drawCircle(playX, 7f * density, 5f * density, playheadPaint)
 
-        val label = "${format(trimStartMs)}  –  ${format(trimEndMs)}"
+        val label = "${format(selectedStartMs)}  –  ${format(selectedEndMs)}"
         canvas.drawText(label, 8f * density, h - 8f * density, textPaint)
     }
 
@@ -117,8 +130,8 @@ class TimelineTrimView @JvmOverloads constructor(
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 parent?.requestDisallowInterceptTouchEvent(true)
-                val startX = timeToX(trimStartMs)
-                val endX = timeToX(trimEndMs)
+                val startX = timeToX(selectedStartMs)
+                val endX = timeToX(selectedEndMs)
                 dragMode = when {
                     abs(x - startX) <= handleWidth * 1.3f -> DragMode.START
                     abs(x - endX) <= handleWidth * 1.3f -> DragMode.END
@@ -127,10 +140,12 @@ class TimelineTrimView @JvmOverloads constructor(
                 updateFromTouch(x, true)
                 return true
             }
+
             MotionEvent.ACTION_MOVE -> {
                 updateFromTouch(x, true)
                 return true
             }
+
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 updateFromTouch(x, false)
                 dragMode = DragMode.NONE
@@ -146,28 +161,40 @@ class TimelineTrimView @JvmOverloads constructor(
         val minGap = 100L
         when (dragMode) {
             DragMode.START -> {
-                trimStartMs = t.coerceIn(0L, (trimEndMs - minGap).coerceAtLeast(0L))
-                playheadMs = playheadMs.coerceAtLeast(trimStartMs)
-                onTrimChanged?.invoke(trimStartMs, trimEndMs)
-                onPlayheadChanged?.invoke(trimStartMs, fromUser)
+                selectedStartMs = t.coerceIn(
+                    0L,
+                    (selectedEndMs - minGap).coerceAtLeast(0L),
+                )
+                playheadMs = playheadMs.coerceAtLeast(selectedStartMs)
+                onTrimChanged?.invoke(selectedStartMs, selectedEndMs)
+                onPlayheadChanged?.invoke(selectedStartMs, fromUser)
             }
+
             DragMode.END -> {
-                trimEndMs = t.coerceIn((trimStartMs + minGap).coerceAtMost(durationMs), durationMs)
-                playheadMs = playheadMs.coerceAtMost(trimEndMs)
-                onTrimChanged?.invoke(trimStartMs, trimEndMs)
-                onPlayheadChanged?.invoke(trimEndMs, fromUser)
+                selectedEndMs = t.coerceIn(
+                    (selectedStartMs + minGap).coerceAtMost(durationMs),
+                    durationMs,
+                )
+                playheadMs = playheadMs.coerceAtMost(selectedEndMs)
+                onTrimChanged?.invoke(selectedStartMs, selectedEndMs)
+                onPlayheadChanged?.invoke(selectedEndMs, fromUser)
             }
+
             DragMode.PLAYHEAD -> {
-                playheadMs = t.coerceIn(trimStartMs, trimEndMs)
+                playheadMs = t.coerceIn(selectedStartMs, selectedEndMs)
                 onPlayheadChanged?.invoke(playheadMs, fromUser)
             }
+
             else -> Unit
         }
         invalidate()
     }
 
-    private fun timeToX(timeMs: Long): Float = width * (timeMs.toDouble() / durationMs.toDouble()).toFloat()
-    private fun xToTime(x: Float): Long = ((x / width.coerceAtLeast(1)) * durationMs).toLong().coerceIn(0L, durationMs)
+    private fun timeToX(timeMs: Long): Float =
+        width * (timeMs.toDouble() / durationMs.toDouble()).toFloat()
+
+    private fun xToTime(x: Float): Long =
+        ((x / width.coerceAtLeast(1)) * durationMs).toLong().coerceIn(0L, durationMs)
 
     private fun centerCropSource(bitmap: Bitmap, targetAspect: Float): Rect {
         val sourceAspect = bitmap.width.toFloat() / bitmap.height.toFloat()
@@ -186,6 +213,10 @@ class TimelineTrimView @JvmOverloads constructor(
         val totalSeconds = ms / 1000.0
         val minutes = (totalSeconds / 60).toInt()
         val seconds = totalSeconds - minutes * 60
-        return if (minutes > 0) "%d:%05.2f".format(minutes, seconds) else "%.2fs".format(seconds)
+        return if (minutes > 0) {
+            "%d:%05.2f".format(minutes, seconds)
+        } else {
+            "%.2fs".format(seconds)
+        }
     }
 }
