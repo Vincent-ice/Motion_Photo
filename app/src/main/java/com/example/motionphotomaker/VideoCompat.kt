@@ -82,15 +82,13 @@ object VideoCompat {
     ): VideoInfo {
         val info = inspect(input)
         require(info.videoMime == "video/avc") {
-            "微信兼容模式目前要求 H.264/AVC 视频；当前为 ${info.videoMime}。"
+            "微信兼容实验模式目前要求 H.264/AVC 视频；当前为 ${info.videoMime}。"
         }
         require(info.audioMime == null || info.audioMime == "audio/mp4a-latm") {
-            "微信兼容模式目前只接受 AAC 音频；当前为 ${info.audioMime}。"
+            "微信兼容实验模式目前只接受 AAC 音频；当前为 ${info.audioMime}。"
         }
         require(requestedStartUs >= 0L) { "开始时间不能小于 0 秒。" }
-        require(requestedDurationUs in 100_000L..3_000_000L) {
-            "动态时长需在 0.1～3.0 秒之间。"
-        }
+        require(requestedDurationUs >= 100_000L) { "动态时长至少需要 0.1 秒。" }
         if (info.durationUs > 0) {
             require(requestedStartUs < info.durationUs) { "开始时间已经超过视频总时长。" }
         }
@@ -122,7 +120,8 @@ object VideoCompat {
             // 无损 remux 必须从同步帧附近开始，因此手动起点会吸附到最近同步帧。
             extractor.seekTo(requestedStartUs, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
             val actualStartUs = extractor.sampleTime.coerceAtLeast(0L)
-            val endUs = actualStartUs + requestedDurationUs
+            val requestedEndUs = actualStartUs + requestedDurationUs
+            val endUs = if (info.durationUs > 0) minOf(requestedEndUs, info.durationUs) else requestedEndUs
 
             val buffer = ByteBuffer.allocateDirect(max(maxInputSize, 4 * 1024 * 1024))
             val bufferInfo = MediaCodec.BufferInfo()
