@@ -41,7 +41,7 @@ class MainActivity : ComponentActivity() {
         coverNameText.text = displayName(uri) ?: uri.toString()
         resultUri = null
         openResultButton.isEnabled = false
-        statusText.text = "JPEG 封面已选择。"
+        statusText.text = "JPEG 封面已选择。生成时会自动中心裁剪到视频宽高比。"
         updateGenerateEnabled()
     }
 
@@ -54,7 +54,7 @@ class MainActivity : ComponentActivity() {
         videoPreview.seekTo(1)
         resultUri = null
         openResultButton.isEnabled = false
-        statusText.text = "MP4 视频已选择。点击视频区域可预览。"
+        statusText.text = "MP4 视频已选择。微信兼容模式会限制为 H.264/AAC，并最多保留前 3 秒。"
         updateGenerateEnabled()
     }
 
@@ -77,7 +77,7 @@ class MainActivity : ComponentActivity() {
             setPadding(dp(20), dp(20), dp(20), dp(28))
         }
         root.addView(text("Motion Photo Maker", 28f))
-        root.addView(text("把任意 JPEG 封面和 MP4 视频后期绑定，生成 Google/Android Motion Photo。", 15f))
+        root.addView(text("微信兼容实验版：任意 JPEG 封面 + H.264/AAC MP4，自动裁剪比例与限制动态时长。", 15f))
         root.addView(text("1 · 封面照片", 18f))
 
         coverPreview = ImageView(this).apply {
@@ -104,7 +104,7 @@ class MainActivity : ComponentActivity() {
         root.addView(videoNameText)
 
         generateButton = Button(this).apply {
-            text = "3 · 生成 Motion Photo"
+            text = "3 · 生成微信兼容 Motion Photo"
             isEnabled = false
             setOnClickListener { generateMotionPhoto() }
         }
@@ -113,9 +113,10 @@ class MainActivity : ComponentActivity() {
         progressBar = ProgressBar(this).apply { visibility = View.GONE }
         root.addView(progressBar)
 
-        statusText = text("等待选择素材。\n第一版不转码：建议视频使用 H.264/AVC 或 HEVC 的 MP4。", 14f).apply {
-            setTextIsSelectable(true)
-        }
+        statusText = text(
+            "等待选择素材。\n兼容策略：H.264/AVC + AAC、最长 3 秒、封面与视频宽高比一致、PresentationTimestampUs=0。",
+            14f
+        ).apply { setTextIsSelectable(true) }
         root.addView(statusText)
 
         openResultButton = Button(this).apply {
@@ -133,15 +134,15 @@ class MainActivity : ComponentActivity() {
         val cover = coverUri ?: return
         val video = videoUri ?: return
         setBusy(true)
-        statusText.text = "正在生成……"
+        statusText.text = "正在生成……\n检查视频编码、裁到最多 3 秒、匹配封面比例，然后写入 Motion Photo。"
         worker.execute {
             try {
-                val result = MotionPhotoGenerator.generate(applicationContext, cover, video, -1L)
+                val result = MotionPhotoGenerator.generate(applicationContext, cover, video)
                 runOnUiThread {
                     resultUri = result.uri
                     setBusy(false)
                     openResultButton.isEnabled = true
-                    statusText.text = "✓ 生成成功\n${result.displayName}\n视频：${formatBytes(result.videoBytes)}\n总大小：${formatBytes(result.totalBytes)}\n目录：DCIM/MotionPhotoMaker"
+                    statusText.text = "✓ 生成成功\n${result.displayName}\n视频：${result.videoWidth}×${result.videoHeight} / ${String.format("%.2f", result.durationUs / 1_000_000.0)} s\n视频大小：${formatBytes(result.videoBytes)}\n总大小：${formatBytes(result.totalBytes)}\n目录：DCIM/MotionPhotoMaker\n请优先测试微信的‘实况’发送入口。"
                 }
             } catch (t: Throwable) {
                 runOnUiThread {
