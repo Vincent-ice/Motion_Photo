@@ -11,8 +11,8 @@ android {
         applicationId = "com.example.motionphotomaker"
         minSdk = 29
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1-demo"
+        versionCode = 4
+        versionName = "0.4-editor"
     }
 
     buildTypes {
@@ -38,4 +38,11 @@ dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.activity:activity-ktx:1.10.1")
+
+    val media3Version = "1.11.0"
+    implementation("androidx.media3:media3-common:$media3Version")
+    implementation("androidx.media3:media3-exoplayer:$media3Version")
+    implementation("androidx.media3:media3-ui:$media3Version")
+    implementation("androidx.media3:media3-transformer:$media3Version")
+    implementation("androidx.media3:media3-effect:$media3Version")
 }
