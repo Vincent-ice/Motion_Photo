@@ -1,5 +1,6 @@
 package com.example.motionphotomaker
 
+import android.app.Activity
 import android.content.ClipData
 import android.content.Intent
 import android.graphics.Bitmap
@@ -40,6 +41,7 @@ class GridMotionPhotoActivity : ComponentActivity() {
     private var previewBitmap: Bitmap? = null
     private var gridSpec = GridComposer.layoutFor(9)
     private var videoUris = MutableList<Uri?>(gridSpec.count) { null }
+    private var slotEdits = MutableList<VideoEditParams?>(gridSpec.count) { null }
     private var pendingVideoSlot = -1
     private val resultUris = mutableListOf<Uri>()
     private val previewTiles = mutableListOf<Bitmap>()
@@ -68,25 +70,53 @@ class GridMotionPhotoActivity : ComponentActivity() {
             pendingVideoSlot = -1
             if (uri == null || slot !in videoUris.indices) return@registerForActivityResult
             videoUris[slot] = uri
-            resultUris.clear()
-            shareButton.isEnabled = false
+            slotEdits[slot] = null
+            invalidateResults()
             rebuildGrid()
             updateGenerateState()
+            launchSlotEditor(slot)
         }
 
     private val multiVideoPicker =
         registerForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(9)) { uris ->
             if (uris.isEmpty()) return@registerForActivityResult
-            for (i in videoUris.indices) videoUris[i] = uris.getOrNull(i)
-            resultUris.clear()
-            shareButton.isEnabled = false
+            for (i in videoUris.indices) {
+                videoUris[i] = uris.getOrNull(i)
+                slotEdits[i] = null
+            }
+            invalidateResults()
             rebuildGrid()
             updateGenerateState()
             statusText.text = if (uris.size >= gridSpec.count) {
-                "已按左上→右下顺序绑定 ${gridSpec.count} 个视频。"
+                "已按左上→右下顺序绑定 ${gridSpec.count} 个视频。点击每格“编辑”可独立设置时间与取景。"
             } else {
                 "已绑定 ${uris.size}/${gridSpec.count} 个视频，其余格子请单独选择。"
             }
+        }
+
+    private val slotEditorLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode != Activity.RESULT_OK) return@registerForActivityResult
+            val data = result.data ?: return@registerForActivityResult
+            val slot = data.getIntExtra(GridSlotEditorActivity.EXTRA_SLOT_INDEX, -1)
+            if (slot !in videoUris.indices || videoUris[slot] == null) return@registerForActivityResult
+
+            val start = data.getLongExtra(GridSlotEditorActivity.EXTRA_START_MS, 0L)
+            val end = data.getLongExtra(GridSlotEditorActivity.EXTRA_END_MS, 1L)
+            val zoom = data.getFloatExtra(GridSlotEditorActivity.EXTRA_ZOOM, 1f)
+            val panX = data.getFloatExtra(GridSlotEditorActivity.EXTRA_PAN_X, 0f)
+            val panY = data.getFloatExtra(GridSlotEditorActivity.EXTRA_PAN_Y, 0f)
+            slotEdits[slot] = VideoEditParams(
+                startMs = start,
+                endMs = end,
+                targetAspect = 1f,
+                zoom = zoom,
+                panX = panX,
+                panY = panY,
+            )
+            invalidateResults()
+            rebuildGrid()
+            statusText.text = "已保存第 ${slot + 1} 格设置：${formatShortTime(start)} → ${formatShortTime(end)} · ${"%.2f".format(zoom)}×"
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -108,7 +138,7 @@ class GridMotionPhotoActivity : ComponentActivity() {
             setTextColor(textPrimary)
             setTypeface(typeface, android.graphics.Typeface.BOLD)
         })
-        root.addView(label("一张图片拆成多个 1:1 Motion Photo · 左上到右下编号", 13f))
+        root.addView(label("一张图片拆成多个 1:1 Motion Photo · 每格视频独立编辑", 13f))
 
         root.addView(sectionTitle("1. 选择宫格"))
         val modeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -147,7 +177,7 @@ class GridMotionPhotoActivity : ComponentActivity() {
         root.addView(imageName)
         root.addView(label("原图会先按整组比例居中裁剪，再无缝切分；4/9 宫格整体为 1:1，6 宫格整体为 3:2。", 12f))
 
-        root.addView(sectionTitle("3. 为每一格绑定视频"))
+        root.addView(sectionTitle("3. 绑定并编辑每格视频"))
         val batchRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val batchButton = secondaryButton("一次选择全部视频")
         batchButton.setOnClickListener {
@@ -158,8 +188,8 @@ class GridMotionPhotoActivity : ComponentActivity() {
         val clearButton = secondaryButton("清空视频")
         clearButton.setOnClickListener {
             videoUris = MutableList(gridSpec.count) { null }
-            resultUris.clear()
-            shareButton.isEnabled = false
+            slotEdits = MutableList(gridSpec.count) { null }
+            invalidateResults()
             rebuildGrid()
             updateGenerateState()
         }
@@ -171,7 +201,7 @@ class GridMotionPhotoActivity : ComponentActivity() {
             alignmentMode = GridLayout.ALIGN_BOUNDS
         }
         root.addView(gridContainer)
-        root.addView(label("点击任意格子的“选择视频”可单独替换。视频会自动中心裁成 1:1，并使用完整时长。", 12f))
+        root.addView(label("每格可以独立设置切入 / 切出、1×–4× 缩放和画面位置。未编辑的格子默认使用完整视频并居中裁成 1:1。", 12f))
 
         generateButton = primaryButton("生成整组 Motion Photo")
         generateButton.isEnabled = false
@@ -211,11 +241,12 @@ class GridMotionPhotoActivity : ComponentActivity() {
     }
 
     private fun setGridCount(count: Int) {
-        val old = videoUris
+        val oldVideos = videoUris
+        val oldEdits = slotEdits
         gridSpec = GridComposer.layoutFor(count)
-        videoUris = MutableList(gridSpec.count) { index -> old.getOrNull(index) }
-        resultUris.clear()
-        if (::shareButton.isInitialized) shareButton.isEnabled = false
+        videoUris = MutableList(gridSpec.count) { index -> oldVideos.getOrNull(index) }
+        slotEdits = MutableList(gridSpec.count) { index -> oldEdits.getOrNull(index) }
+        invalidateResults()
         if (::progressBar.isInitialized) progressBar.max = gridSpec.count
         rebuildGrid()
         updateGenerateState()
@@ -234,7 +265,7 @@ class GridMotionPhotoActivity : ComponentActivity() {
                 previewBitmap = bitmap
                 rebuildGrid()
                 updateGenerateState()
-                statusText.text = "原图已载入。现在为 ${gridSpec.count} 个格子绑定视频。"
+                statusText.text = "原图已载入。现在为 ${gridSpec.count} 个格子绑定并编辑视频。"
             }
         }
     }
@@ -257,6 +288,15 @@ class GridMotionPhotoActivity : ComponentActivity() {
                 setPadding(dp(4), dp(4), dp(4), dp(4))
                 background = rounded(panel, 14f)
             }
+
+            card.addView(TextView(this).apply {
+                text = "#${index + 1}"
+                textSize = 11f
+                setTextColor(textPrimary)
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                setPadding(dp(2), 0, 0, dp(3))
+            })
+
             val imageView = ImageView(this).apply {
                 setBackgroundColor(Color.BLACK)
                 scaleType = ImageView.ScaleType.CENTER_CROP
@@ -273,15 +313,34 @@ class GridMotionPhotoActivity : ComponentActivity() {
             card.addView(imageView, LinearLayout.LayoutParams(tileWidth - dp(8), tileWidth - dp(8)))
 
             val bound = videoUris.getOrNull(index) != null
-            val slotButton = secondaryButton(if (bound) "✓ ${index + 1} · 已绑定" else "${index + 1} · 选择视频")
-            slotButton.setOnClickListener {
+            val pickButton = secondaryButton(if (bound) "更换视频" else "选择视频")
+            pickButton.setOnClickListener {
                 pendingVideoSlot = index
                 singleVideoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
             }
             card.addView(
-                slotButton,
-                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42)).apply { topMargin = dp(4) },
+                pickButton,
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)).apply { topMargin = dp(4) },
             )
+
+            val editButton = secondaryButton(if (slotEdits.getOrNull(index) != null) "✓ 已编辑" else "编辑")
+            editButton.isEnabled = bound
+            editButton.alpha = if (bound) 1f else 0.45f
+            editButton.setOnClickListener { launchSlotEditor(index) }
+            card.addView(
+                editButton,
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)).apply { topMargin = dp(4) },
+            )
+
+            val summary = when {
+                !bound -> "未绑定"
+                slotEdits.getOrNull(index) == null -> "完整时长 · 1.00×"
+                else -> {
+                    val p = slotEdits[index]!!
+                    "${formatShortTime(p.startMs)}–${formatShortTime(p.endMs)} · ${"%.2f".format(p.zoom)}×"
+                }
+            }
+            card.addView(label(summary, 10f).apply { maxLines = 2 })
 
             val row = index / gridSpec.columns
             val col = index % gridSpec.columns
@@ -301,6 +360,25 @@ class GridMotionPhotoActivity : ComponentActivity() {
         }
     }
 
+    private fun launchSlotEditor(index: Int) {
+        val uri = videoUris.getOrNull(index) ?: return
+        val saved = slotEdits.getOrNull(index)
+        val intent = Intent(this, GridSlotEditorActivity::class.java).apply {
+            data = uri
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            putExtra(GridSlotEditorActivity.EXTRA_SLOT_INDEX, index)
+            putExtra(GridSlotEditorActivity.EXTRA_VIDEO_URI, uri.toString())
+            if (saved != null) {
+                putExtra(GridSlotEditorActivity.EXTRA_START_MS, saved.startMs)
+                putExtra(GridSlotEditorActivity.EXTRA_END_MS, saved.endMs)
+                putExtra(GridSlotEditorActivity.EXTRA_ZOOM, saved.zoom)
+                putExtra(GridSlotEditorActivity.EXTRA_PAN_X, saved.panX)
+                putExtra(GridSlotEditorActivity.EXTRA_PAN_Y, saved.panY)
+            }
+        }
+        slotEditorLauncher.launch(intent)
+    }
+
     private fun generateGrid() {
         val sourceUri = sourceImageUri
         if (sourceUri == null) {
@@ -308,6 +386,7 @@ class GridMotionPhotoActivity : ComponentActivity() {
             return
         }
         val videos = videoUris.toList()
+        val edits = slotEdits.toList()
         if (videos.any { it == null }) {
             val missing = videos.mapIndexedNotNull { index, uri -> if (uri == null) index + 1 else null }
             statusText.text = "还有格子未绑定视频：${missing.joinToString(", ")}"
@@ -341,14 +420,7 @@ class GridMotionPhotoActivity : ComponentActivity() {
                     }
                     val durationMs = readVideoDurationMs(videoUri)
                     require(durationMs > 100L) { "第 ${index + 1} 个视频无法读取有效时长。" }
-                    val params = VideoEditParams(
-                        startMs = 0L,
-                        endMs = durationMs,
-                        targetAspect = 1f,
-                        zoom = 1f,
-                        panX = 0f,
-                        panY = 0f,
-                    )
+                    val params = normalizeParams(edits[index], durationMs)
                     val displayName = "GRID_${timestamp}_${String.format(Locale.US, "%02d", index + 1)}_MP.jpg"
                     val result = MotionPhotoGenerator.generatePreparedJpeg(
                         context = applicationContext,
@@ -372,7 +444,7 @@ class GridMotionPhotoActivity : ComponentActivity() {
                     generateButton.isEnabled = true
                     shareButton.isEnabled = true
                     statusText.text =
-                        "✓ 已生成 ${created.size} 张动态宫格\n保存目录：DCIM/MotionPhotoMaker/Grid_$timestamp\n按 1→${created.size} 顺序选择即可还原整幅拼图。"
+                        "✓ 已生成 ${created.size} 张动态宫格\n保存目录：DCIM/MotionPhotoMaker/Grid_$timestamp\n每格已应用自己的时间与取景参数。"
                 }
             } catch (t: Throwable) {
                 created.forEach { uri -> runCatching { contentResolver.delete(uri, null, null) } }
@@ -386,6 +458,23 @@ class GridMotionPhotoActivity : ComponentActivity() {
                 source?.recycle()
             }
         }
+    }
+
+    private fun normalizeParams(saved: VideoEditParams?, durationMs: Long): VideoEditParams {
+        if (saved == null) {
+            return VideoEditParams(0L, durationMs, 1f, 1f, 0f, 0f)
+        }
+        val minGap = 100L
+        val start = saved.startMs.coerceIn(0L, (durationMs - minGap).coerceAtLeast(0L))
+        val end = saved.endMs.coerceIn((start + minGap).coerceAtMost(durationMs), durationMs)
+        return saved.copy(
+            startMs = start,
+            endMs = end,
+            targetAspect = 1f,
+            zoom = saved.zoom.coerceIn(1f, 4f),
+            panX = saved.panX.coerceIn(-1f, 1f),
+            panY = saved.panY.coerceIn(-1f, 1f),
+        )
     }
 
     private fun shareResultsToWeChat() {
@@ -427,10 +516,22 @@ class GridMotionPhotoActivity : ComponentActivity() {
         return null
     }
 
+    private fun invalidateResults() {
+        resultUris.clear()
+        if (::shareButton.isInitialized) shareButton.isEnabled = false
+    }
+
     private fun updateGenerateState() {
         if (::generateButton.isInitialized) {
             generateButton.isEnabled = sourceImageUri != null && videoUris.all { it != null }
         }
+    }
+
+    private fun formatShortTime(ms: Long): String {
+        val seconds = ms / 1000.0
+        val minutes = (seconds / 60).toInt()
+        val rest = seconds - minutes * 60
+        return if (minutes > 0) "%d:%04.1f".format(minutes, rest) else "%.1fs".format(rest)
     }
 
     private fun clearPreviewTiles() {

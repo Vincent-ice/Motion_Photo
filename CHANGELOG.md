@@ -10,12 +10,12 @@ The project follows semantic versioning for stable releases. Development-only co
 - Support PNG cover images; PNG covers are converted to the final JPEG primary image with transparent pixels composited on white.
 - Add an “图片” output-aspect option that uses the selected cover image’s original aspect ratio for both video export and the final Motion Photo.
 - Add progressive precision zoom to the trim timeline: after narrowing a long video to a small interval, releasing an in/out handle automatically focuses the timeline around that interval for finer adjustment; double-tap restores the full-video timeline.
-- Add a grid Motion Photo mode for 4-grid (2×2), 6-grid (3×2) and 9-grid (3×3) Moments-style collages. A single source image is split into 1:1 tiles, each tile can bind an independent video, and the app batch-generates an ordered set of Motion Photos.
-- Add batch video selection, per-tile video replacement, grouped MediaStore output, and multi-image WeChat sharing for grid projects.
+- Add 4 / 6 / 9-grid Motion Photo projects that split one source image into square tiles and bind one video to each tile.
+- Add an independent 1:1 editor for every grid video. Each tile now keeps its own trim-in, trim-out, zoom and pan settings and applies them during batch generation.
 
 ### Changed
 - Precision-mode timeline rendering uses a local time ruler instead of stretching full-video thumbnails into a misleading short-range preview.
-- The app now opens on a mode selector for single Motion Photo editing or grid collage generation.
+- Grid projects no longer force every video to use its full duration and centered crop; unedited tiles keep that default, while edited tiles use their saved per-slot parameters.
 
 ### Planned
 - Continue improving preview/export alignment across more device codecs and rotation metadata.

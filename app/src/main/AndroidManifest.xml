@@ -6,6 +6,7 @@
     android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
 <activity android:name=".AlignedEditorActivity" android:exported="false" />
+<activity android:name=".GridSlotEditorActivity" android:exported="false" />
 <activity android:name=".GridMotionPhotoActivity" android:exported="false" />
 <activity android:name=".StudioHomeActivity" android:exported="true">
 <intent-filter>
