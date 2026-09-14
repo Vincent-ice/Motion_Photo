@@ -3,6 +3,8 @@ package com.example.motionphotomaker
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Matrix
 import android.media.ExifInterface
 import android.media.MediaExtractor
@@ -120,11 +122,12 @@ object VideoCompat {
      * by the on-screen CoverCropView.
      */
     fun cropCover(
-        jpeg: ByteArray,
+        image: ByteArray,
+        mimeType: String?,
         params: CoverEditParams,
     ): ByteArray {
         require(params.targetAspect > 0f)
-        val oriented = decodeOrientedJpeg(jpeg)
+        val oriented = decodeOrientedImage(image, mimeType)
 
         val crop = CropMath.computePixels(
             sourceWidth = oriented.width,
@@ -152,27 +155,54 @@ object VideoCompat {
             .coerceIn(0, oriented.height - cropH)
 
         val cropped = Bitmap.createBitmap(oriented, cropX, cropY, cropW, cropH)
+        val jpegBitmap = if (cropped.hasAlpha()) {
+            Bitmap.createBitmap(cropped.width, cropped.height, Bitmap.Config.ARGB_8888).also { matte ->
+                Canvas(matte).apply {
+                    drawColor(Color.WHITE)
+                    drawBitmap(cropped, 0f, 0f, null)
+                }
+            }
+        } else {
+            cropped
+        }
+
         val out = ByteArrayOutputStream()
-        require(cropped.compress(Bitmap.CompressFormat.JPEG, 95, out)) {
+        require(jpegBitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)) {
             "JPEG 封面重新编码失败。"
         }
 
+        if (jpegBitmap !== cropped) jpegBitmap.recycle()
         if (cropped !== oriented) cropped.recycle()
         oriented.recycle()
         return out.toByteArray()
     }
 
-    private fun decodeOrientedJpeg(jpeg: ByteArray): Bitmap {
-        val orientation = runCatching {
-            ExifInterface(ByteArrayInputStream(jpeg)).getAttributeInt(
-                ExifInterface.TAG_ORIENTATION,
-                ExifInterface.ORIENTATION_NORMAL,
-            )
-        }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+    private fun decodeOrientedImage(image: ByteArray, mimeType: String?): Bitmap {
+        val isJpeg = mimeType.equals("image/jpeg", ignoreCase = true) ||
+            (image.size >= 2 && (image[0].toInt() and 0xFF) == 0xFF &&
+                (image[1].toInt() and 0xFF) == 0xD8)
+        val isPng = mimeType.equals("image/png", ignoreCase = true) ||
+            (image.size >= 8 &&
+                (image[0].toInt() and 0xFF) == 0x89 && image[1].toInt() == 0x50 &&
+                image[2].toInt() == 0x4E && image[3].toInt() == 0x47 &&
+                image[4].toInt() == 0x0D && image[5].toInt() == 0x0A &&
+                image[6].toInt() == 0x1A && image[7].toInt() == 0x0A)
+        require(isJpeg || isPng) { "封面不是有效的 JPEG 或 PNG。" }
+
+        val orientation = if (isJpeg) {
+            runCatching {
+                ExifInterface(ByteArrayInputStream(image)).getAttributeInt(
+                    ExifInterface.TAG_ORIENTATION,
+                    ExifInterface.ORIENTATION_NORMAL,
+                )
+            }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+        } else {
+            ExifInterface.ORIENTATION_NORMAL
+        }
 
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, bounds)
-        require(bounds.outWidth > 0 && bounds.outHeight > 0) { "无法解码 JPEG 封面。" }
+        BitmapFactory.decodeByteArray(image, 0, image.size, bounds)
+        require(bounds.outWidth > 0 && bounds.outHeight > 0) { "无法解码 JPEG / PNG 封面。" }
 
         var sample = 1
         while (bounds.outWidth / sample > 4096 || bounds.outHeight / sample > 4096) {
@@ -180,11 +210,11 @@ object VideoCompat {
         }
 
         val decoded = BitmapFactory.decodeByteArray(
-            jpeg,
+            image,
             0,
-            jpeg.size,
+            image.size,
             BitmapFactory.Options().apply { inSampleSize = sample },
-        ) ?: error("无法解码 JPEG 封面。")
+        ) ?: error("无法解码 JPEG / PNG 封面。")
 
         val matrix = Matrix()
         when (orientation) {

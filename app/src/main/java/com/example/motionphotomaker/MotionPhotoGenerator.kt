@@ -38,9 +38,77 @@ object MotionPhotoGenerator {
     ): GenerateResult {
         val resolver = context.contentResolver
         val coverMime = resolver.getType(coverUri)
-        require(coverMime == null || coverMime.equals("image/jpeg", ignoreCase = true)) {
-            "当前版本只支持 JPEG 封面；当前类型：$coverMime"
+        require(
+            coverMime == null ||
+                coverMime.equals("image/jpeg", ignoreCase = true) ||
+                coverMime.equals("image/png", ignoreCase = true)
+        ) {
+            "当前版本只支持 JPEG / PNG 封面；当前类型：$coverMime"
         }
+        require(kotlin.math.abs(videoParams.targetAspect - coverParams.targetAspect) < 0.0001f) {
+            "封面和视频的目标比例不一致。"
+        }
+        val coverOriginal = resolver.openInputStream(coverUri)?.use { it.readBytes() }
+            ?: error("无法读取所选封面。")
+
+        return generateInternal(
+            context = context,
+            coverOriginal = coverOriginal,
+            coverMime = coverMime,
+            preparedJpeg = false,
+            videoUri = videoUri,
+            videoParams = videoParams,
+            coverParams = coverParams,
+            displayNameOverride = null,
+            relativePath = Environment.DIRECTORY_DCIM + "/MotionPhotoMaker",
+        )
+    }
+
+    /**
+     * Grid mode passes an already prepared JPEG tile. It is not cropped or
+     * recompressed again before Motion Photo XMP is injected.
+     */
+    fun generatePreparedJpeg(
+        context: Context,
+        coverJpeg: ByteArray,
+        videoUri: Uri,
+        videoParams: VideoEditParams,
+        displayName: String,
+        relativePath: String,
+    ): GenerateResult {
+        require(
+            coverJpeg.size >= 2 &&
+                (coverJpeg[0].toInt() and 0xFF) == 0xFF &&
+                (coverJpeg[1].toInt() and 0xFF) == 0xD8,
+        ) { "宫格封面不是有效 JPEG。" }
+        require(displayName.endsWith("MP.jpg", ignoreCase = true)) {
+            "Motion Photo 文件名必须以 MP.jpg 结尾。"
+        }
+        return generateInternal(
+            context = context,
+            coverOriginal = coverJpeg,
+            coverMime = "image/jpeg",
+            preparedJpeg = true,
+            videoUri = videoUri,
+            videoParams = videoParams,
+            coverParams = CoverEditParams(targetAspect = videoParams.targetAspect),
+            displayNameOverride = displayName,
+            relativePath = relativePath,
+        )
+    }
+
+    private fun generateInternal(
+        context: Context,
+        coverOriginal: ByteArray,
+        coverMime: String?,
+        preparedJpeg: Boolean,
+        videoUri: Uri,
+        videoParams: VideoEditParams,
+        coverParams: CoverEditParams,
+        displayNameOverride: String?,
+        relativePath: String,
+    ): GenerateResult {
+        val resolver = context.contentResolver
         val videoMime = resolver.getType(videoUri)
         require(videoMime == null || videoMime.startsWith("video/", ignoreCase = true)) {
             "请选择有效视频；当前类型：$videoMime"
@@ -73,12 +141,14 @@ object MotionPhotoGenerator {
             val videoLength = editedVideo.length()
             require(videoLength > 0L) { "编辑后的视频为空。" }
 
-            val jpegOriginal = resolver.openInputStream(coverUri)?.use { it.readBytes() }
-                ?: error("无法读取所选封面。")
-            val croppedCover = VideoCompat.cropCover(jpegOriginal, coverParams)
+            val finalCover = if (preparedJpeg) {
+                coverOriginal
+            } else {
+                VideoCompat.cropCover(coverOriginal, coverMime, coverParams)
+            }
 
             val xmp = buildMotionPhotoXmp(videoLength)
-            val injected = JpegXmpInjector.injectMotionXmp(croppedCover, xmp)
+            val injected = JpegXmpInjector.injectMotionXmp(finalCover, xmp)
             val jpeg = injected.jpeg
             require(
                 jpeg.size >= 2 &&
@@ -87,14 +157,11 @@ object MotionPhotoGenerator {
             ) { "内部校验失败：JPEG 没有以 EOI 结束。" }
 
             val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-            val displayName = "IMG_${timestamp}_MP.jpg"
+            val displayName = displayNameOverride ?: "IMG_${timestamp}_MP.jpg"
             val values = ContentValues().apply {
                 put(MediaStore.Images.Media.DISPLAY_NAME, displayName)
                 put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-                put(
-                    MediaStore.Images.Media.RELATIVE_PATH,
-                    Environment.DIRECTORY_DCIM + "/MotionPhotoMaker",
-                )
+                put(MediaStore.Images.Media.RELATIVE_PATH, relativePath)
                 put(MediaStore.Images.Media.IS_PENDING, 1)
             }
 

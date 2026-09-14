@@ -52,33 +52,45 @@ PowerShell:
 
 All feature work should be verified on `develop` first. Before release:
 
-1. Merge the verified changes to `main`.
-2. Update `versionName` and `versionCode` in `app/build.gradle.kts`.
-3. Move the relevant entries from `CHANGELOG.md` → `Unreleased` into a dated version section.
-4. Confirm `THIRD_PARTY_NOTICES.md` if dependencies changed.
-5. Confirm the `main` CI build is green.
+1. Update `versionName` and `versionCode` in `app/build.gradle.kts` on `develop`.
+2. Move the relevant entries from `CHANGELOG.md` → `Unreleased` into a dated version section.
+3. Confirm `THIRD_PARTY_NOTICES.md` if dependencies changed.
+4. Confirm the final `develop` CI build is green.
+5. Merge the verified release tree to `main` with a commit message beginning with `release:`.
 
 Version example:
 
 ```kotlin
-versionCode = 11
-versionName = "0.1.1"
+versionCode = 20
+versionName = "0.2.0"
 ```
 
 ## 4. Publish
+
+There are three supported entry points.
+
+### Stable merge automation
+
+A push to `main` whose head commit message starts with `release:` automatically runs the signed Release workflow. The workflow uses the app `versionName`, creates `v<versionName>` if necessary, and publishes the GitHub Release.
+
+### Release workflow UI
+
+Open **Actions → Release → Run workflow**, enter the exact `versionName` without the leading `v`, and choose whether it is a prerelease.
+
+### Tag release
 
 The tag must exactly be `v` + `versionName`.
 
 ```bash
 git checkout main
 git pull --ff-only
-git tag v0.1.1
-git push origin v0.1.1
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
-The `Release` GitHub Actions workflow then:
+The Release workflow:
 
-- validates `v0.1.1` ↔ `versionName = "0.1.1"`;
+- validates the requested version against `versionName`;
 - restores the signing keystore from repository secrets;
 - builds `assembleRelease`;
 - verifies the APK signature with Android `apksigner`;
@@ -96,7 +108,7 @@ After the workflow completes:
 2. Download the APK and `SHA256SUMS.txt`.
 3. Check the SHA-256 value.
 4. Install over the previous stable release to confirm signing continuity.
-5. Generate at least one Motion Photo and verify it in the system gallery and WeChat.
+5. Generate at least one single Motion Photo and one grid project, then verify them in the system gallery and WeChat.
 
 Linux/macOS:
 

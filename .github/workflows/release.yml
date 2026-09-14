@@ -2,12 +2,14 @@ name: Release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version, e.g. 0.1.1 (without v)'
+        description: 'Release version, e.g. 0.2.0 (without v)'
         required: true
         type: string
       prerelease:
@@ -21,6 +23,10 @@ permissions:
 
 jobs:
   release:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.ref_type == 'tag' ||
+      (github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release:'))
     runs-on: ubuntu-latest
     environment: release
 
@@ -48,14 +54,17 @@ jobs:
           MANUAL_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
+          APP_VERSION=$(grep -m1 'versionName = ' app/build.gradle.kts | sed -E 's/.*versionName = "([^"]+)".*/\1/')
           if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
             VERSION="$MANUAL_VERSION"
             TAG="v$VERSION"
-          else
+          elif [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             TAG="$GITHUB_REF_NAME"
             VERSION="${TAG#v}"
+          else
+            VERSION="$APP_VERSION"
+            TAG="v$VERSION"
           fi
-          APP_VERSION=$(grep -m1 'versionName = ' app/build.gradle.kts | sed -E 's/.*versionName = "([^"]+)".*/\1/')
           if [[ "$TAG" != v* ]]; then
             echo "Release tag must start with v" >&2
             exit 1
@@ -149,11 +158,11 @@ jobs:
             --title "Motion Photo Maker ${{ steps.version.outputs.version }}"
             --generate-notes
           )
-          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             ARGS+=(--verify-tag)
           else
             ARGS+=(--target "$GITHUB_SHA")
-            if [[ "$MANUAL_PRERELEASE" == "true" ]]; then
+            if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$MANUAL_PRERELEASE" == "true" ]]; then
               ARGS+=(--prerelease)
             fi
           fi
