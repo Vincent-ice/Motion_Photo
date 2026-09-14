@@ -22,13 +22,19 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
+      - name: Read version name
+        id: version
+        shell: bash
+        run: |
+          VERSION_NAME=$(grep -m1 'versionName = ' app/build.gradle.kts | sed -E 's/.*versionName = "([^"]+)".*/\1/')
+          echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
       - name: Build debug APK
         run: gradle :app:assembleDebug --no-daemon --stacktrace
       - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk MotionPhotoMakerEditor.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk "MotionPhotoMaker-${{ steps.version.outputs.version_name }}.apk"
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: MotionPhotoMakerEditor-APK
-          path: MotionPhotoMakerEditor.apk
+          name: MotionPhotoMaker-${{ steps.version.outputs.version_name }}-APK
+          path: MotionPhotoMaker-${{ steps.version.outputs.version_name }}.apk
           if-no-files-found: error
