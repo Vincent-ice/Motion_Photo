@@ -22,12 +22,16 @@ object MotionPhotoGenerator {
         val videoWidth: Int,
         val videoHeight: Int,
         val durationUs: Long,
+        val requestedStartUs: Long,
+        val requestedDurationUs: Long,
     )
 
     fun generate(
         context: Context,
         coverUri: Uri,
         videoUri: Uri,
+        startUs: Long,
+        durationUs: Long,
     ): GenerateResult {
         val resolver = context.contentResolver
         val coverMime = resolver.getType(coverUri)
@@ -38,6 +42,8 @@ object MotionPhotoGenerator {
         require(videoMime == null || videoMime.equals("video/mp4", ignoreCase = true)) {
             "当前版本只支持 MP4 视频；当前类型：$videoMime"
         }
+        require(startUs >= 0L) { "开始时间不能小于 0。" }
+        require(durationUs >= 100_000L) { "时长至少为 0.1 秒。" }
 
         val sourceVideo = File.createTempFile("motion_photo_source_", ".mp4", context.cacheDir)
         val compatVideo = File.createTempFile("motion_photo_compat_", ".mp4", context.cacheDir)
@@ -50,7 +56,17 @@ object MotionPhotoGenerator {
             require(sourceVideo.length() > 0) { "视频文件为空。" }
             require(looksLikeMp4(sourceVideo)) { "视频不像有效 MP4/ISO-BMFF 文件。" }
 
-            val compatInfo = VideoCompat.remuxForWeChat(sourceVideo, compatVideo, 3_000_000L)
+            val sourceInfo = VideoCompat.inspect(sourceVideo)
+            if (sourceInfo.durationUs > 0) {
+                require(startUs < sourceInfo.durationUs) { "开始时间已超过视频总时长。" }
+            }
+
+            val compatInfo = VideoCompat.remuxForWeChat(
+                input = sourceVideo,
+                output = compatVideo,
+                requestedStartUs = startUs,
+                requestedDurationUs = durationUs,
+            )
             val videoLength = compatVideo.length()
             require(videoLength > 0) { "兼容化后的视频为空。" }
 
@@ -103,7 +119,9 @@ object MotionPhotoGenerator {
                 replacedXmpPackets = injected.removedStandardXmp + injected.removedExtendedXmp,
                 videoWidth = compatInfo.displayWidth,
                 videoHeight = compatInfo.displayHeight,
-                durationUs = compatInfo.durationUs.coerceAtMost(3_000_000L),
+                durationUs = compatInfo.durationUs,
+                requestedStartUs = startUs,
+                requestedDurationUs = durationUs,
             )
         } catch (t: Throwable) {
             outputUri?.let { resolver.delete(it, null, null) }
@@ -116,7 +134,7 @@ object MotionPhotoGenerator {
 
     private fun buildMotionPhotoXmp(videoLength: Long): ByteArray {
         require(videoLength > 0)
-        val xml = """<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="MotionPhotoMaker WeChatCompat 0.2">
+        val xml = """<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="MotionPhotoMaker WeChatCompat 0.3">
   <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
     <rdf:Description rdf:about=""
       xmlns:Camera="http://ns.google.com/photos/1.0/camera/"
