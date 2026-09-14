@@ -4,11 +4,15 @@
     android:icon="@mipmap/ic_launcher"
     android:roundIcon="@mipmap/ic_launcher"
     android:theme="@android:style/Theme.Material.Light.NoActionBar">
-<activity android:name=".AlignedEditorActivity" android:exported="true">
+
+<activity android:name=".AlignedEditorActivity" android:exported="false" />
+<activity android:name=".GridMotionPhotoActivity" android:exported="false" />
+<activity android:name=".StudioHomeActivity" android:exported="true">
 <intent-filter>
 <action android:name="android.intent.action.MAIN" />
 <category android:name="android.intent.category.LAUNCHER" />
 </intent-filter>
 </activity>
+
 </application>
 </manifest>
