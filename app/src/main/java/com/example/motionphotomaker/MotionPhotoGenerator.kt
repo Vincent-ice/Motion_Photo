@@ -5,11 +5,13 @@ import android.content.Context
 import android.net.Uri
 import android.os.Environment
 import android.provider.MediaStore
+import androidx.media3.common.util.UnstableApi
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+@UnstableApi
 object MotionPhotoGenerator {
 
     data class GenerateResult(
@@ -22,16 +24,17 @@ object MotionPhotoGenerator {
         val videoWidth: Int,
         val videoHeight: Int,
         val durationUs: Long,
-        val requestedStartUs: Long,
-        val requestedDurationUs: Long,
+        val requestedStartMs: Long,
+        val requestedEndMs: Long,
+        val targetAspect: Float,
+        val zoom: Float,
     )
 
     fun generate(
         context: Context,
         coverUri: Uri,
         videoUri: Uri,
-        startUs: Long,
-        durationUs: Long,
+        params: VideoEditParams,
     ): GenerateResult {
         val resolver = context.contentResolver
         val coverMime = resolver.getType(coverUri)
@@ -39,49 +42,39 @@ object MotionPhotoGenerator {
             "当前版本只支持 JPEG 封面；当前类型：$coverMime"
         }
         val videoMime = resolver.getType(videoUri)
-        require(videoMime == null || videoMime.equals("video/mp4", ignoreCase = true)) {
-            "当前版本只支持 MP4 视频；当前类型：$videoMime"
+        require(videoMime == null || videoMime.startsWith("video/", ignoreCase = true)) {
+            "请选择有效视频；当前类型：$videoMime"
         }
-        require(startUs >= 0L) { "开始时间不能小于 0。" }
-        require(durationUs >= 100_000L) { "时长至少为 0.1 秒。" }
+        require(params.startMs >= 0L)
+        require(params.endMs > params.startMs)
+        require(params.targetAspect > 0f)
 
         val sourceVideo = File.createTempFile("motion_photo_source_", ".mp4", context.cacheDir)
-        val compatVideo = File.createTempFile("motion_photo_compat_", ".mp4", context.cacheDir)
+        val editedVideo = File.createTempFile("motion_photo_edited_", ".mp4", context.cacheDir)
         var outputUri: Uri? = null
 
         try {
             resolver.openInputStream(videoUri)?.use { input ->
                 sourceVideo.outputStream().buffered().use { output -> input.copyTo(output) }
             } ?: error("无法读取所选视频。")
-            require(sourceVideo.length() > 0) { "视频文件为空。" }
-            require(looksLikeMp4(sourceVideo)) { "视频不像有效 MP4/ISO-BMFF 文件。" }
+            require(sourceVideo.length() > 0L) { "视频文件为空。" }
 
-            val sourceInfo = VideoCompat.inspect(sourceVideo)
-            if (sourceInfo.durationUs > 0) {
-                require(startUs < sourceInfo.durationUs) { "开始时间已超过视频总时长。" }
-            }
-
-            val compatInfo = VideoCompat.remuxForWeChat(
+            val outputInfo = VideoCompat.exportEditedForWeChat(
+                context = context,
                 input = sourceVideo,
-                output = compatVideo,
-                requestedStartUs = startUs,
-                requestedDurationUs = durationUs,
+                output = editedVideo,
+                params = params,
             )
-            val videoLength = compatVideo.length()
-            require(videoLength > 0) { "兼容化后的视频为空。" }
+            val videoLength = editedVideo.length()
+            require(videoLength > 0L) { "编辑后的视频为空。" }
 
             val jpegOriginal = resolver.openInputStream(coverUri)?.use { it.readBytes() }
                 ?: error("无法读取所选封面。")
-            val croppedCover = VideoCompat.cropCoverToVideoAspect(
-                jpegOriginal,
-                compatInfo.displayWidth,
-                compatInfo.displayHeight,
-            )
+            val croppedCover = VideoCompat.cropCoverToAspect(jpegOriginal, params.targetAspect)
 
             val xmp = buildMotionPhotoXmp(videoLength)
             val injected = JpegXmpInjector.injectMotionXmp(croppedCover, xmp)
             val jpeg = injected.jpeg
-
             require(jpeg.size >= 2 &&
                 (jpeg[jpeg.size - 2].toInt() and 0xFF) == 0xFF &&
                 (jpeg[jpeg.size - 1].toInt() and 0xFF) == 0xD9
@@ -103,7 +96,7 @@ object MotionPhotoGenerator {
 
             resolver.openOutputStream(targetUri, "w")?.buffered()?.use { output ->
                 output.write(jpeg)
-                compatVideo.inputStream().buffered().use { input -> input.copyTo(output) }
+                editedVideo.inputStream().buffered().use { input -> input.copyTo(output) }
             } ?: error("无法写入生成的 Motion Photo。")
 
             values.clear()
@@ -117,24 +110,26 @@ object MotionPhotoGenerator {
                 videoBytes = videoLength,
                 totalBytes = jpeg.size.toLong() + videoLength,
                 replacedXmpPackets = injected.removedStandardXmp + injected.removedExtendedXmp,
-                videoWidth = compatInfo.displayWidth,
-                videoHeight = compatInfo.displayHeight,
-                durationUs = compatInfo.durationUs,
-                requestedStartUs = startUs,
-                requestedDurationUs = durationUs,
+                videoWidth = outputInfo.displayWidth,
+                videoHeight = outputInfo.displayHeight,
+                durationUs = outputInfo.durationUs,
+                requestedStartMs = params.startMs,
+                requestedEndMs = params.endMs,
+                targetAspect = params.targetAspect,
+                zoom = params.zoom,
             )
         } catch (t: Throwable) {
             outputUri?.let { resolver.delete(it, null, null) }
             throw t
         } finally {
             sourceVideo.delete()
-            compatVideo.delete()
+            editedVideo.delete()
         }
     }
 
     private fun buildMotionPhotoXmp(videoLength: Long): ByteArray {
         require(videoLength > 0)
-        val xml = """<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="MotionPhotoMaker WeChatCompat 0.3">
+        val xml = """<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="MotionPhotoMaker Editor 0.4">
   <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
     <rdf:Description rdf:about=""
       xmlns:Camera="http://ns.google.com/photos/1.0/camera/"
@@ -159,19 +154,5 @@ object MotionPhotoGenerator {
   </rdf:RDF>
 </x:xmpmeta>"""
         return xml.toByteArray(Charsets.UTF_8)
-    }
-
-    private fun looksLikeMp4(file: File): Boolean {
-        val prefix = ByteArray(64)
-        val count = file.inputStream().use { it.read(prefix) }
-        if (count < 4) return false
-        for (i in 0..(count - 4)) {
-            if (prefix[i] == 'f'.code.toByte() &&
-                prefix[i + 1] == 't'.code.toByte() &&
-                prefix[i + 2] == 'y'.code.toByte() &&
-                prefix[i + 3] == 'p'.code.toByte()
-            ) return true
-        }
-        return false
     }
 }
