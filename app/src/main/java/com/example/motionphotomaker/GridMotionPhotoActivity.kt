@@ -10,7 +10,6 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
 import android.provider.OpenableColumns
-import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
@@ -39,8 +38,8 @@ class GridMotionPhotoActivity : ComponentActivity() {
 
     private var sourceImageUri: Uri? = null
     private var previewBitmap: Bitmap? = null
-    private var layout = GridComposer.layoutFor(9)
-    private var videoUris = MutableList<Uri?>(layout.count) { null }
+    private var gridSpec = GridComposer.layoutFor(9)
+    private var videoUris = MutableList<Uri?>(gridSpec.count) { null }
     private var pendingVideoSlot = -1
     private val resultUris = mutableListOf<Uri>()
     private val previewTiles = mutableListOf<Bitmap>()
@@ -78,17 +77,15 @@ class GridMotionPhotoActivity : ComponentActivity() {
     private val multiVideoPicker =
         registerForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(9)) { uris ->
             if (uris.isEmpty()) return@registerForActivityResult
-            for (i in videoUris.indices) {
-                videoUris[i] = uris.getOrNull(i)
-            }
+            for (i in videoUris.indices) videoUris[i] = uris.getOrNull(i)
             resultUris.clear()
             shareButton.isEnabled = false
             rebuildGrid()
             updateGenerateState()
-            statusText.text = if (uris.size >= layout.count) {
-                "已按左上→右下顺序绑定 ${layout.count} 个视频。"
+            statusText.text = if (uris.size >= gridSpec.count) {
+                "已按左上→右下顺序绑定 ${gridSpec.count} 个视频。"
             } else {
-                "已绑定 ${uris.size}/${layout.count} 个视频，其余格子请单独选择。"
+                "已绑定 ${uris.size}/${gridSpec.count} 个视频，其余格子请单独选择。"
             }
         }
 
@@ -116,21 +113,22 @@ class GridMotionPhotoActivity : ComponentActivity() {
         root.addView(sectionTitle("1. 选择宫格"))
         val modeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         listOf(4, 6, 9).forEach { count ->
+            val modeButton = secondaryButton("${count} 宫格")
+            if (count == gridSpec.count) {
+                modeButton.setTextColor(Color.BLACK)
+                modeButton.background = rounded(accent, 14f)
+            }
+            modeButton.setOnClickListener {
+                setGridCount(count)
+                for (i in 0 until modeRow.childCount) {
+                    val button = modeRow.getChildAt(i) as Button
+                    val active = button === modeButton
+                    button.setTextColor(if (active) Color.BLACK else textPrimary)
+                    button.background = rounded(if (active) accent else panel2, 14f)
+                }
+            }
             modeRow.addView(
-                secondaryButton("${count} 宫格").apply {
-                    if (count == layout.count) setTextColor(Color.BLACK).also {
-                        background = rounded(accent, 14f)
-                    }
-                    setOnClickListener {
-                        setGridCount(count)
-                        for (i in 0 until modeRow.childCount) {
-                            val b = modeRow.getChildAt(i) as Button
-                            val active = b === this
-                            b.setTextColor(if (active) Color.BLACK else textPrimary)
-                            b.background = rounded(if (active) accent else panel2, 14f)
-                        }
-                    }
-                },
+                modeButton,
                 LinearLayout.LayoutParams(0, dp(44), 1f).apply {
                     marginEnd = if (count != 9) dp(8) else 0
                 },
@@ -140,45 +138,32 @@ class GridMotionPhotoActivity : ComponentActivity() {
         root.addView(label("4 宫格 = 2×2；6 宫格 = 3×2；9 宫格 = 3×3。每一格固定输出 1:1。", 12f))
 
         root.addView(sectionTitle("2. 选择拼图原图"))
-        root.addView(
-            secondaryButton("选择 JPEG / PNG 图片").apply {
-                setOnClickListener {
-                    imagePicker.launch(
-                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
-                    )
-                }
-            },
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)),
-        )
+        val pickImageButton = secondaryButton("选择 JPEG / PNG 图片")
+        pickImageButton.setOnClickListener {
+            imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+        }
+        root.addView(pickImageButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)))
         imageName = label("尚未选择图片", 12f)
         root.addView(imageName)
         root.addView(label("原图会先按整组比例居中裁剪，再无缝切分；4/9 宫格整体为 1:1，6 宫格整体为 3:2。", 12f))
 
         root.addView(sectionTitle("3. 为每一格绑定视频"))
         val batchRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        batchRow.addView(
-            secondaryButton("一次选择全部视频").apply {
-                setOnClickListener {
-                    multiVideoPicker.launch(
-                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly),
-                    )
-                }
-            },
-            LinearLayout.LayoutParams(0, dp(46), 1f),
-        )
+        val batchButton = secondaryButton("一次选择全部视频")
+        batchButton.setOnClickListener {
+            multiVideoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
+        }
+        batchRow.addView(batchButton, LinearLayout.LayoutParams(0, dp(46), 1f))
         batchRow.addView(space(dp(8)))
-        batchRow.addView(
-            secondaryButton("清空视频").apply {
-                setOnClickListener {
-                    videoUris = MutableList(layout.count) { null }
-                    resultUris.clear()
-                    shareButton.isEnabled = false
-                    rebuildGrid()
-                    updateGenerateState()
-                }
-            },
-            LinearLayout.LayoutParams(0, dp(46), 1f),
-        )
+        val clearButton = secondaryButton("清空视频")
+        clearButton.setOnClickListener {
+            videoUris = MutableList(gridSpec.count) { null }
+            resultUris.clear()
+            shareButton.isEnabled = false
+            rebuildGrid()
+            updateGenerateState()
+        }
+        batchRow.addView(clearButton, LinearLayout.LayoutParams(0, dp(46), 1f))
         root.addView(batchRow)
 
         gridContainer = GridLayout(this).apply {
@@ -186,45 +171,36 @@ class GridMotionPhotoActivity : ComponentActivity() {
             alignmentMode = GridLayout.ALIGN_BOUNDS
         }
         root.addView(gridContainer)
-
         root.addView(label("点击任意格子的“选择视频”可单独替换。视频会自动中心裁成 1:1，并使用完整时长。", 12f))
 
-        generateButton = primaryButton("生成整组 Motion Photo").apply {
-            isEnabled = false
-            setOnClickListener { generateGrid() }
-        }
+        generateButton = primaryButton("生成整组 Motion Photo")
+        generateButton.isEnabled = false
+        generateButton.setOnClickListener { generateGrid() }
         root.addView(
             generateButton,
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(54)).apply {
-                topMargin = dp(20)
-            },
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(54)).apply { topMargin = dp(20) },
         )
 
         progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
-            max = layout.count
+            max = gridSpec.count
             progress = 0
             visibility = View.GONE
         }
         root.addView(
             progressBar,
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(8)).apply {
-                topMargin = dp(12)
-            },
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(8)).apply { topMargin = dp(12) },
         )
 
         statusText = label("选择原图并为全部格子绑定视频后即可生成。", 13f)
         statusText.setTextIsSelectable(true)
         root.addView(statusText)
 
-        shareButton = secondaryButton("分享整组到微信").apply {
-            isEnabled = false
-            setOnClickListener { shareResultsToWeChat() }
-        }
+        shareButton = secondaryButton("分享整组到微信")
+        shareButton.isEnabled = false
+        shareButton.setOnClickListener { shareResultsToWeChat() }
         root.addView(
             shareButton,
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply {
-                topMargin = dp(10)
-            },
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { topMargin = dp(10) },
         )
         root.addView(label("若微信没有直接进入朋友圈，请在朋友圈相册选择界面按 1→N 顺序选中刚生成的这一组。", 12f))
 
@@ -236,11 +212,11 @@ class GridMotionPhotoActivity : ComponentActivity() {
 
     private fun setGridCount(count: Int) {
         val old = videoUris
-        layout = GridComposer.layoutFor(count)
-        videoUris = MutableList(layout.count) { index -> old.getOrNull(index) }
+        gridSpec = GridComposer.layoutFor(count)
+        videoUris = MutableList(gridSpec.count) { index -> old.getOrNull(index) }
         resultUris.clear()
         if (::shareButton.isInitialized) shareButton.isEnabled = false
-        if (::progressBar.isInitialized) progressBar.max = layout.count
+        if (::progressBar.isInitialized) progressBar.max = gridSpec.count
         rebuildGrid()
         updateGenerateState()
     }
@@ -248,9 +224,7 @@ class GridMotionPhotoActivity : ComponentActivity() {
     private fun loadPreview(uri: Uri) {
         statusText.text = "正在解析原图…"
         worker.execute {
-            val bitmap = runCatching {
-                GridComposer.decodeImage(applicationContext, uri, 1600)
-            }.getOrNull()
+            val bitmap = runCatching { GridComposer.decodeImage(applicationContext, uri, 1600) }.getOrNull()
             runOnUiThread {
                 if (bitmap == null) {
                     statusText.text = "图片解码失败，请换一张 JPEG / PNG。"
@@ -260,7 +234,7 @@ class GridMotionPhotoActivity : ComponentActivity() {
                 previewBitmap = bitmap
                 rebuildGrid()
                 updateGenerateState()
-                statusText.text = "原图已载入。现在为 ${layout.count} 个格子绑定视频。"
+                statusText.text = "原图已载入。现在为 ${gridSpec.count} 个格子绑定视频。"
             }
         }
     }
@@ -269,28 +243,27 @@ class GridMotionPhotoActivity : ComponentActivity() {
         if (!::gridContainer.isInitialized) return
         clearPreviewTiles()
         gridContainer.removeAllViews()
-        gridContainer.columnCount = layout.columns
-        gridContainer.rowCount = layout.rows
+        gridContainer.columnCount = gridSpec.columns
+        gridContainer.rowCount = gridSpec.rows
 
         val screenWidth = resources.displayMetrics.widthPixels
-        val tileWidth = ((screenWidth - dp(44) - dp(8) * (layout.columns - 1)) / layout.columns)
+        val tileWidth = ((screenWidth - dp(44) - dp(8) * (gridSpec.columns - 1)) / gridSpec.columns)
             .coerceAtLeast(dp(86))
         val source = previewBitmap
 
-        repeat(layout.count) { index ->
+        repeat(gridSpec.count) { index ->
             val card = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(4), dp(4), dp(4), dp(4))
                 background = rounded(panel, 14f)
             }
-
             val imageView = ImageView(this).apply {
                 setBackgroundColor(Color.BLACK)
                 scaleType = ImageView.ScaleType.CENTER_CROP
                 contentDescription = "宫格 ${index + 1}"
             }
             if (source != null) {
-                runCatching { GridComposer.createTile(source, layout, index) }
+                runCatching { GridComposer.createTile(source, gridSpec, index) }
                     .getOrNull()
                     ?.let { tile ->
                         previewTiles += tile
@@ -300,35 +273,28 @@ class GridMotionPhotoActivity : ComponentActivity() {
             card.addView(imageView, LinearLayout.LayoutParams(tileWidth - dp(8), tileWidth - dp(8)))
 
             val bound = videoUris.getOrNull(index) != null
+            val slotButton = secondaryButton(if (bound) "✓ ${index + 1} · 已绑定" else "${index + 1} · 选择视频")
+            slotButton.setOnClickListener {
+                pendingVideoSlot = index
+                singleVideoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
+            }
             card.addView(
-                secondaryButton(if (bound) "✓ ${index + 1} · 已绑定" else "${index + 1} · 选择视频").apply {
-                    setOnClickListener {
-                        pendingVideoSlot = index
-                        singleVideoPicker.launch(
-                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly),
-                        )
-                    }
-                },
-                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42)).apply {
-                    topMargin = dp(4)
-                },
+                slotButton,
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42)).apply { topMargin = dp(4) },
             )
 
-            val row = index / layout.columns
-            val col = index % layout.columns
+            val row = index / gridSpec.columns
+            val col = index % gridSpec.columns
             gridContainer.addView(
                 card,
-                GridLayout.LayoutParams(
-                    GridLayout.spec(row),
-                    GridLayout.spec(col),
-                ).apply {
+                GridLayout.LayoutParams(GridLayout.spec(row), GridLayout.spec(col)).apply {
                     width = tileWidth
                     height = ViewGroup.LayoutParams.WRAP_CONTENT
                     setMargins(
                         if (col == 0) 0 else dp(4),
                         if (row == 0) 0 else dp(4),
-                        if (col == layout.columns - 1) 0 else dp(4),
-                        if (row == layout.rows - 1) 0 else dp(4),
+                        if (col == gridSpec.columns - 1) 0 else dp(4),
+                        if (row == gridSpec.rows - 1) 0 else dp(4),
                     )
                 },
             )
@@ -350,13 +316,13 @@ class GridMotionPhotoActivity : ComponentActivity() {
 
         generateButton.isEnabled = false
         shareButton.isEnabled = false
-        progressBar.max = layout.count
+        progressBar.max = gridSpec.count
         progressBar.progress = 0
         progressBar.visibility = View.VISIBLE
-        statusText.text = "正在准备 ${layout.count} 宫格…"
+        statusText.text = "正在准备 ${gridSpec.count} 宫格…"
         resultUris.clear()
 
-        val currentLayout = layout
+        val spec = gridSpec
         worker.execute {
             val created = mutableListOf<Uri>()
             var source: Bitmap? = null
@@ -365,15 +331,14 @@ class GridMotionPhotoActivity : ComponentActivity() {
                 val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
                 val relativePath = Environment.DIRECTORY_DCIM + "/MotionPhotoMaker/Grid_$timestamp"
 
-                for (index in 0 until currentLayout.count) {
+                for (index in 0 until spec.count) {
                     val videoUri = videos[index] ?: error("第 ${index + 1} 格没有视频。")
-                    val tile = GridComposer.createTile(source, currentLayout, index)
+                    val tile = GridComposer.createTile(source, spec, index)
                     val jpeg = try {
                         GridComposer.encodeTileAsJpeg(tile)
                     } finally {
                         tile.recycle()
                     }
-
                     val durationMs = readVideoDurationMs(videoUri)
                     require(durationMs > 100L) { "第 ${index + 1} 个视频无法读取有效时长。" }
                     val params = VideoEditParams(
@@ -394,10 +359,9 @@ class GridMotionPhotoActivity : ComponentActivity() {
                         relativePath = relativePath,
                     )
                     created += result.uri
-
                     runOnUiThread {
                         progressBar.progress = index + 1
-                        statusText.text = "正在生成 ${index + 1}/${currentLayout.count} · ${displayName}"
+                        statusText.text = "正在生成 ${index + 1}/${spec.count} · $displayName"
                     }
                 }
 
@@ -447,18 +411,17 @@ class GridMotionPhotoActivity : ComponentActivity() {
         val retriever = MediaMetadataRetriever()
         return try {
             retriever.setDataSource(this, uri)
-            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-                ?.toLongOrNull() ?: 0L
+            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
         } finally {
             retriever.release()
         }
     }
 
     private fun displayName(uri: Uri): String? {
-        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
-            if (c.moveToFirst()) {
-                val index = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                if (index >= 0) return c.getString(index)
+        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (index >= 0) return cursor.getString(index)
             }
         }
         return null
@@ -515,8 +478,7 @@ class GridMotionPhotoActivity : ComponentActivity() {
         layoutParams = LinearLayout.LayoutParams(width, 1)
     }
 
-    private fun dp(value: Int) =
-        (value * resources.displayMetrics.density).roundToInt()
+    private fun dp(value: Int) = (value * resources.displayMetrics.density).roundToInt()
 
     override fun onDestroy() {
         clearPreviewTiles()
