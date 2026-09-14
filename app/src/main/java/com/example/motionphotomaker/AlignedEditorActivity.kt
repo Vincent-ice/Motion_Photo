@@ -199,7 +199,7 @@ class AlignedEditorActivity : ComponentActivity() {
                 setTypeface(typeface, android.graphics.Typeface.BOLD)
             },
         )
-        root.addView(label("预览 / 导出同坐标系 · develop", 13f))
+        root.addView(label("v0.1.0 · 预览 / 导出同坐标系", 13f))
 
         root.addView(sectionTitle("视频预览"))
         val videoCard = card()
