@@ -1,0 +1,19 @@
+# Android / Gradle
+.gradle/
+**/build/
+local.properties
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+
+# Signing material - never commit release keys
+*.jks
+*.keystore
+keystore.properties
+signing.properties
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
