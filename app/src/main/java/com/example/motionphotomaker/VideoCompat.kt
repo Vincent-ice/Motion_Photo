@@ -74,13 +74,25 @@ object VideoCompat {
         )
     }
 
-    fun remuxForWeChat(input: File, output: File, maxDurationUs: Long = 3_000_000L): VideoInfo {
+    fun remuxForWeChat(
+        input: File,
+        output: File,
+        requestedStartUs: Long,
+        requestedDurationUs: Long,
+    ): VideoInfo {
         val info = inspect(input)
         require(info.videoMime == "video/avc") {
             "微信兼容模式目前要求 H.264/AVC 视频；当前为 ${info.videoMime}。"
         }
         require(info.audioMime == null || info.audioMime == "audio/mp4a-latm") {
             "微信兼容模式目前只接受 AAC 音频；当前为 ${info.audioMime}。"
+        }
+        require(requestedStartUs >= 0L) { "开始时间不能小于 0 秒。" }
+        require(requestedDurationUs in 100_000L..3_000_000L) {
+            "动态时长需在 0.1～3.0 秒之间。"
+        }
+        if (info.durationUs > 0) {
+            require(requestedStartUs < info.durationUs) { "开始时间已经超过视频总时长。" }
         }
 
         val extractor = MediaExtractor()
@@ -90,6 +102,7 @@ object VideoCompat {
 
         val trackMap = mutableMapOf<Int, Int>()
         var maxInputSize = 1024 * 1024
+        var muxerStarted = false
         try {
             for (i in 0 until extractor.trackCount) {
                 val format = extractor.getTrackFormat(i)
@@ -104,11 +117,15 @@ object VideoCompat {
             }
             require(trackMap.isNotEmpty()) { "没有可写入的音视频轨。" }
             muxer.start()
-            extractor.seekTo(0L, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+            muxerStarted = true
+
+            // 无损 remux 必须从同步帧附近开始，因此手动起点会吸附到最近同步帧。
+            extractor.seekTo(requestedStartUs, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+            val actualStartUs = extractor.sampleTime.coerceAtLeast(0L)
+            val endUs = actualStartUs + requestedDurationUs
 
             val buffer = ByteBuffer.allocateDirect(max(maxInputSize, 4 * 1024 * 1024))
             val bufferInfo = MediaCodec.BufferInfo()
-            var firstPtsUs = Long.MIN_VALUE
             while (true) {
                 buffer.clear()
                 val size = extractor.readSampleData(buffer, 0)
@@ -116,17 +133,16 @@ object VideoCompat {
                 val inputTrack = extractor.sampleTrackIndex
                 val outputTrack = trackMap[inputTrack]
                 val sampleTime = extractor.sampleTime
-                if (outputTrack != null && sampleTime >= 0) {
-                    if (firstPtsUs == Long.MIN_VALUE) firstPtsUs = sampleTime
-                    val pts = sampleTime - firstPtsUs
-                    if (pts > maxDurationUs) break
+                if (sampleTime < 0 || sampleTime > endUs) break
+                if (outputTrack != null && sampleTime >= actualStartUs) {
+                    val pts = sampleTime - actualStartUs
                     bufferInfo.set(0, size, pts.coerceAtLeast(0L), extractor.sampleFlags)
                     muxer.writeSampleData(outputTrack, buffer, bufferInfo)
                 }
                 if (!extractor.advance()) break
             }
         } finally {
-            runCatching { muxer.stop() }
+            if (muxerStarted) runCatching { muxer.stop() }
             muxer.release()
             extractor.release()
         }
