@@ -2,6 +2,7 @@ package com.example.motionphotomaker
 
 import android.content.Intent
 import android.graphics.Color
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.media.MediaMetadataRetriever
 import android.net.Uri
@@ -24,6 +25,7 @@ import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
@@ -36,10 +38,10 @@ import kotlin.math.roundToInt
 
 @UnstableApi
 class MainActivity : ComponentActivity() {
-    private val bg = Color.rgb(16, 17, 20)
-    private val panel = Color.rgb(30, 32, 37)
+    private val bg = Color.rgb(14, 15, 18)
+    private val panel = Color.rgb(29, 31, 36)
     private val panel2 = Color.rgb(42, 45, 52)
-    private val textPrimary = Color.rgb(245, 246, 248)
+    private val textPrimary = Color.rgb(246, 247, 249)
     private val textSecondary = Color.rgb(174, 178, 188)
     private val accent = Color.rgb(255, 196, 46)
 
@@ -80,7 +82,7 @@ class MainActivity : ComponentActivity() {
 
     private val playbackTicker = object : Runnable {
         override fun run() {
-            if (::player.isInitialized && player.isPlaying) {
+            if (::player.isInitialized && ::timeline.isInitialized && player.isPlaying) {
                 val pos = player.currentPosition
                 timeline.setPlayhead(pos)
                 if (pos >= trimEndMs) player.seekTo(trimStartMs)
@@ -113,10 +115,6 @@ class MainActivity : ComponentActivity() {
         setContentView(buildUi())
         playerView.player = player
         player.addListener(object : Player.Listener {
-            override fun onPlaybackStateChanged(playbackState: Int) {
-                playButton.text = if (player.isPlaying) "暂停" else "播放选区"
-            }
-
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 playButton.text = if (isPlaying) "暂停" else "播放选区"
             }
@@ -125,7 +123,6 @@ class MainActivity : ComponentActivity() {
                 if (sourceWidth <= 0 || sourceHeight <= 0) {
                     sourceWidth = videoSize.width
                     sourceHeight = videoSize.height
-                    if (targetAspect <= 0f && sourceHeight > 0) targetAspect = sourceWidth.toFloat() / sourceHeight
                     refreshPreviewEffects()
                 }
             }
@@ -137,21 +134,21 @@ class MainActivity : ComponentActivity() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(bg)
-            setPadding(dp(16), dp(16), dp(16), dp(32))
+            setPadding(dp(16), dp(18), dp(16), dp(34))
         }
         root.addView(TextView(this).apply {
             text = "Motion Photo Studio"
             textSize = 28f
             setTextColor(textPrimary)
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setTypeface(typeface, Typeface.BOLD)
         })
-        root.addView(label("可视化裁剪 · 比例 · 缩放 · 微信兼容导出", 13f).apply { setPadding(0, dp(4), 0, dp(16)) })
+        root.addView(label("可视化时间裁剪 · 比例裁剪 · 缩放取景 · 微信兼容导出", 13f).apply {
+            setPadding(0, dp(4), 0, dp(14))
+        })
 
         root.addView(sectionTitle("视频编辑"))
         val editorCard = card()
-        previewOuter = FrameLayout(this).apply {
-            setBackgroundColor(Color.BLACK)
-        }
+        previewOuter = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
         editorCard.addView(previewOuter, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(420)))
 
         previewViewport = FrameLayout(this).apply {
@@ -159,7 +156,7 @@ class MainActivity : ComponentActivity() {
             clipChildren = true
             clipToPadding = true
         }
-        previewOuter.addView(previewViewport, FrameLayout.LayoutParams(dp(236), dp(420), Gravity.CENTER))
+        previewOuter.addView(previewViewport, FrameLayout.LayoutParams(dp(236), dp(404), Gravity.CENTER))
 
         playerView = PlayerView(this).apply {
             useController = false
@@ -170,12 +167,13 @@ class MainActivity : ComponentActivity() {
 
         gestureView = EditorGestureView(this).apply {
             setBackgroundColor(Color.TRANSPARENT)
+            setTransform(1f, 0f, 0f)
             onTransformChanged = { z, x, y ->
-                zoom = z
-                panX = x
-                panY = y
-                zoomSeek.progress = ((z - 1f) * 100f).roundToInt()
-                updateTransformInfo()
+                this@MainActivity.zoom = z
+                this@MainActivity.panX = x
+                this@MainActivity.panY = y
+                if (::zoomSeek.isInitialized) zoomSeek.progress = ((z - 1f) * 100f).roundToInt()
+                if (::transformInfo.isInitialized) updateTransformInfo()
                 refreshPreviewEffects()
             }
         }
@@ -188,7 +186,9 @@ class MainActivity : ComponentActivity() {
         }
         playButton = secondaryButton("播放选区").apply {
             setOnClickListener {
-                if (player.isPlaying) player.pause() else {
+                if (player.isPlaying) {
+                    player.pause()
+                } else {
                     if (player.currentPosition !in trimStartMs..trimEndMs) player.seekTo(trimStartMs)
                     player.play()
                 }
@@ -197,10 +197,11 @@ class MainActivity : ComponentActivity() {
         playRow.addView(playButton, LinearLayout.LayoutParams(0, dp(44), 1f))
         playRow.addView(space(dp(8)))
         playRow.addView(secondaryButton("选择视频").apply {
-            setOnClickListener { videoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)) }
+            setOnClickListener {
+                videoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
+            }
         }, LinearLayout.LayoutParams(0, dp(44), 1f))
         editorCard.addView(playRow)
-
         videoInfo = label("尚未选择视频", 12f)
         editorCard.addView(videoInfo)
         root.addView(editorCard)
@@ -211,17 +212,19 @@ class MainActivity : ComponentActivity() {
             durationMs = 1L
             setTrim(0L, 1L)
             onTrimChanged = { start, end ->
-                trimStartMs = start
-                trimEndMs = end
-                trimInfo.text = "${formatTime(start)}  →  ${formatTime(end)}   ·   ${(end - start) / 1000.0f} s"
+                this@MainActivity.trimStartMs = start
+                this@MainActivity.trimEndMs = end
+                trimInfo.text = "${formatTime(start)}  →  ${formatTime(end)}   ·   ${"%.2f".format((end - start) / 1000.0)} s"
                 if (player.currentPosition !in start..end) player.seekTo(start)
             }
             onPlayheadChanged = { position, fromUser ->
                 if (fromUser) player.seekTo(position)
             }
         }
-        timelineCard.addView(timeline, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(92)))
-        trimInfo = label("拖动左右白色手柄设置切入和切出", 12f).apply { setPadding(0, dp(8), 0, 0) }
+        timelineCard.addView(timeline, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(96)))
+        trimInfo = label("拖动左右白色手柄设置切入和切出；点击/拖动中间区域可预览。", 12f).apply {
+            setPadding(0, dp(8), 0, 0)
+        }
         timelineCard.addView(trimInfo)
         root.addView(timelineCard)
 
@@ -239,8 +242,7 @@ class MainActivity : ComponentActivity() {
         ).forEach { (name, ratio) ->
             val button = chipButton(name)
             button.setOnClickListener {
-                val selected = ratio ?: if (sourceHeight > 0) sourceWidth.toFloat() / sourceHeight else 9f / 16f
-                targetAspect = selected
+                targetAspect = ratio ?: if (sourceHeight > 0) sourceWidth.toFloat() / sourceHeight else 9f / 16f
                 zoom = 1f
                 panX = 0f
                 panY = 0f
@@ -252,7 +254,9 @@ class MainActivity : ComponentActivity() {
                 refreshPreviewEffects()
             }
             aspectButtons += button to ratio
-            ratioRow.addView(button, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(42)).apply { marginEnd = dp(8) })
+            ratioRow.addView(button, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(42)).apply {
+                marginEnd = dp(8)
+            })
         }
         ratioScroll.addView(ratioRow)
         ratioCard.addView(ratioScroll)
@@ -264,15 +268,15 @@ class MainActivity : ComponentActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        zoomRow.addView(label("1×", 12f), LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        zoomRow.addView(label("1×", 12f))
         zoomSeek = SeekBar(this).apply {
             max = 300
             progress = 0
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                     if (!fromUser) return
-                    zoom = 1f + progress / 100f
-                    gestureView.setTransform(zoom, panX, panY)
+                    this@MainActivity.zoom = 1f + progress / 100f
+                    gestureView.setTransform(this@MainActivity.zoom, panX, panY)
                     updateTransformInfo()
                     refreshPreviewEffects()
                 }
@@ -285,18 +289,20 @@ class MainActivity : ComponentActivity() {
         transformCard.addView(zoomRow)
         transformInfo = label("缩放 1.00× · 位置居中", 12f)
         transformCard.addView(transformInfo)
-        transformCard.addView(label("在预览画面上双指缩放；单指拖动画面改变取景位置。导出会使用完全相同的裁剪区域。", 12f))
+        transformCard.addView(label("预览区域支持双指缩放、单指拖拽取景；三分线辅助构图。导出会采用相同画面。", 12f).apply {
+            setPadding(0, dp(5), 0, 0)
+        })
         transformCard.addView(secondaryButton("重置取景").apply {
             setOnClickListener {
-                zoom = 1f
-                panX = 0f
-                panY = 0f
+                this@MainActivity.zoom = 1f
+                this@MainActivity.panX = 0f
+                this@MainActivity.panY = 0f
                 zoomSeek.progress = 0
                 gestureView.reset()
                 updateTransformInfo()
                 refreshPreviewEffects()
             }
-        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply { topMargin = dp(8) })
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply { topMargin = dp(9) })
         root.addView(transformCard)
 
         root.addView(sectionTitle("静态封面"))
@@ -307,11 +313,13 @@ class MainActivity : ComponentActivity() {
         }
         coverCard.addView(coverPreview, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(150)))
         coverCard.addView(secondaryButton("选择 JPEG 封面").apply {
-            setOnClickListener { coverPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+            setOnClickListener {
+                coverPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+            }
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply { topMargin = dp(10) })
         coverName = label("尚未选择封面", 12f)
         coverCard.addView(coverName)
-        coverCard.addView(label("封面会自动裁成与最终视频完全相同的宽高比，以保持微信动态照片兼容性。", 12f))
+        coverCard.addView(label("封面会自动裁成最终视频的同一宽高比。根据目前实测，这是微信识别动态照片的关键兼容条件。", 12f))
         root.addView(coverCard)
 
         generateButton = primaryButton("生成 Motion Photo").apply {
@@ -324,9 +332,9 @@ class MainActivity : ComponentActivity() {
             visibility = View.GONE
             isIndeterminate = true
         }
-        root.addView(progressBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(6)).apply { topMargin = dp(10) })
+        root.addView(progressBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(7)).apply { topMargin = dp(10) })
 
-        statusText = label("选择视频和 JPEG 封面后即可生成。", 13f).apply {
+        statusText = label("选择视频和 JPEG 封面后即可生成。长视频允许完整保留，不再限制 3 秒。", 13f).apply {
             setPadding(0, dp(10), 0, dp(8))
             setTextIsSelectable(true)
         }
@@ -348,7 +356,7 @@ class MainActivity : ComponentActivity() {
     private fun loadVideo(uri: Uri) {
         player.pause()
         player.clearMediaItems()
-        player.setMediaItem(androidx.media3.common.MediaItem.fromUri(uri))
+        player.setMediaItem(MediaItem.fromUri(uri))
         player.prepare()
         player.seekTo(0L)
 
@@ -358,7 +366,7 @@ class MainActivity : ComponentActivity() {
         sourceHeight = meta.displayHeight
         targetAspect = if (sourceHeight > 0) sourceWidth.toFloat() / sourceHeight else 9f / 16f
         trimStartMs = 0L
-        trimEndMs = minOf(sourceDurationMs, 3000L).coerceAtLeast(100L)
+        trimEndMs = sourceDurationMs
         zoom = 1f
         panX = 0f
         panY = 0f
@@ -368,7 +376,7 @@ class MainActivity : ComponentActivity() {
         timeline.durationMs = sourceDurationMs
         timeline.setTrim(trimStartMs, trimEndMs)
         timeline.setPlayhead(trimStartMs)
-        trimInfo.text = "${formatTime(trimStartMs)}  →  ${formatTime(trimEndMs)}   ·   ${(trimEndMs - trimStartMs) / 1000.0f} s"
+        trimInfo.text = "${formatTime(trimStartMs)}  →  ${formatTime(trimEndMs)}   ·   ${"%.2f".format((trimEndMs - trimStartMs) / 1000.0)} s"
         videoInfo.text = "${displayName(uri) ?: "视频"}  ·  ${sourceWidth}×${sourceHeight}  ·  ${formatTime(sourceDurationMs)}"
 
         updateAspectButtons(aspectButtons.first().first)
@@ -401,7 +409,11 @@ class MainActivity : ComponentActivity() {
                 h = maxH
                 w = (h * targetAspect).roundToInt()
             }
-            previewViewport.layoutParams = FrameLayout.LayoutParams(w.coerceAtLeast(dp(96)), h.coerceAtLeast(dp(96)), Gravity.CENTER)
+            previewViewport.layoutParams = FrameLayout.LayoutParams(
+                w.coerceAtLeast(dp(96)),
+                h.coerceAtLeast(dp(96)),
+                Gravity.CENTER,
+            )
         }
     }
 
@@ -434,7 +446,7 @@ class MainActivity : ComponentActivity() {
         )
         player.pause()
         setBusy(true)
-        statusText.text = "正在导出视频编辑结果并封装 Motion Photo…\n长视频或高分辨率素材会需要一些时间。"
+        statusText.text = "正在导出编辑结果并封装 Motion Photo…\n比例/缩放会重新编码为 H.264 + AAC，长视频可能需要一些时间。"
 
         worker.execute {
             try {
@@ -447,7 +459,7 @@ class MainActivity : ComponentActivity() {
                         appendLine("✓ 生成成功：${result.displayName}")
                         appendLine("视频：${result.videoWidth}×${result.videoHeight} · ${"%.2f".format(result.durationUs / 1_000_000.0)} s")
                         appendLine("比例：${"%.3f".format(result.targetAspect)} · 缩放 ${"%.2f".format(result.zoom)}×")
-                        append("已保存至 DCIM/MotionPhotoMaker，可直接到微信测试实况发送。")
+                        append("已保存至 DCIM/MotionPhotoMaker，可直接在微信测试实况发送。")
                     }
                 }
             } catch (t: Throwable) {
@@ -518,7 +530,7 @@ class MainActivity : ComponentActivity() {
         text = value
         textSize = 16f
         setTextColor(textPrimary)
-        setTypeface(typeface, android.graphics.Typeface.BOLD)
+        setTypeface(typeface, Typeface.BOLD)
         setPadding(0, dp(20), 0, dp(8))
     }
 
@@ -573,7 +585,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         mainHandler.removeCallbacks(playbackTicker)
-        playerView.player = null
+        if (::playerView.isInitialized) playerView.player = null
         player.release()
         worker.shutdownNow()
         super.onDestroy()
