@@ -194,7 +194,9 @@ class SafeMainActivity : ComponentActivity() {
         }
         previewOuter.addView(previewViewport, FrameLayout.LayoutParams(dp(208), dp(370), Gravity.CENTER))
 
-        videoTexture = TextureView(this).apply { setBackgroundColor(Color.BLACK) }
+        // TextureView does not support background drawables. Keep the black
+        // background on previewViewport instead of calling setBackgroundColor here.
+        videoTexture = TextureView(this)
         previewViewport.addView(videoTexture, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
 
         gestureView = EditorGestureView(this).apply {
