@@ -99,6 +99,11 @@ class AlignedEditorActivity : ComponentActivity() {
     private lateinit var progressBar: ProgressBar
     private lateinit var statusText: TextView
 
+    private enum class AspectMode { VIDEO, IMAGE, FIXED }
+
+    private var aspectMode = AspectMode.VIDEO
+    private var videoAspectButton: Button? = null
+    private var imageAspectButton: Button? = null
     private val aspectButtons = mutableListOf<Pair<Button, Float?>>()
 
     private val ticker = object : Runnable {
@@ -120,7 +125,7 @@ class AlignedEditorActivity : ComponentActivity() {
             coverUri = uri
             resultUri = null
             openResultButton.isEnabled = false
-            coverName.text = displayName(uri) ?: "已选择 JPEG 封面"
+            coverName.text = displayName(uri) ?: "已选择 JPEG / PNG 封面"
             loadCover(uri)
             updateGenerateEnabled()
         }
@@ -324,7 +329,9 @@ class AlignedEditorActivity : ComponentActivity() {
             "9:16" to (9f / 16f),
         ).forEach { (title, ratio) ->
             val button = chipButton(title)
+            if (title == "原始") videoAspectButton = button
             button.setOnClickListener {
+                aspectMode = if (ratio == null) AspectMode.VIDEO else AspectMode.FIXED
                 targetAspect = ratio ?: if (sourceHeight > 0) {
                     sourceWidth.toFloat() / sourceHeight.toFloat()
                 } else {
@@ -345,6 +352,33 @@ class AlignedEditorActivity : ComponentActivity() {
                 ).apply { marginEnd = dp(8) },
             )
         }
+
+        val imageButton = chipButton("图片")
+        imageAspectButton = imageButton
+        imageButton.setOnClickListener {
+            val bitmap = coverBitmap
+            if (bitmap == null || bitmap.height <= 0) {
+                statusText.text = "请先选择 JPEG 或 PNG 封面，再使用“图片”比例。"
+                return@setOnClickListener
+            }
+            aspectMode = AspectMode.IMAGE
+            targetAspect = bitmap.width.toFloat() / bitmap.height.toFloat()
+            resetVideoTransform()
+            resetCoverTransform()
+            coverCropView.targetAspect = targetAspect
+            updateAspectButtons(imageButton)
+            updateViewportSizes()
+            statusText.text =
+                "已使用图片原比例 ${bitmap.width}:${bitmap.height}（${"%.4f".format(targetAspect)}）。"
+        }
+        aspectButtons += imageButton to null
+        ratioRow.addView(
+            imageButton,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                dp(42),
+            ).apply { marginEnd = dp(8) },
+        )
         ratioScroll.addView(ratioRow)
         ratioCard.addView(ratioScroll)
         root.addView(ratioCard)
@@ -405,7 +439,7 @@ class AlignedEditorActivity : ComponentActivity() {
             ),
         )
         coverCard.addView(
-            secondaryButton("选择 JPEG 封面").apply {
+            secondaryButton("选择 JPEG / PNG 封面").apply {
                 setOnClickListener {
                     coverPicker.launch(
                         PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
@@ -456,7 +490,7 @@ class AlignedEditorActivity : ComponentActivity() {
         }
         root.addView(progressBar)
 
-        statusText = label("选择视频和 JPEG 封面后生成。预览与导出现在使用同一组裁剪参数。", 13f)
+        statusText = label("选择视频和 JPEG / PNG 封面后生成。可用“图片”比例让最终视频跟随封面原比例。", 13f)
         statusText.setTextIsSelectable(true)
         root.addView(statusText)
 
@@ -472,7 +506,7 @@ class AlignedEditorActivity : ComponentActivity() {
             ).apply { topMargin = dp(8) },
         )
 
-        updateAspectButtons(aspectButtons.last().first)
+        updateAspectButtons(videoAspectButton ?: aspectButtons.first().first)
         return ScrollView(this).apply {
             setBackgroundColor(bg)
             addView(root)
@@ -486,10 +520,12 @@ class AlignedEditorActivity : ComponentActivity() {
             sourceDurationMs = meta.durationMs.coerceAtLeast(1L)
             sourceWidth = meta.width
             sourceHeight = meta.height
-            targetAspect = if (sourceHeight > 0) {
-                sourceWidth.toFloat() / sourceHeight.toFloat()
-            } else {
-                9f / 16f
+            if (aspectMode == AspectMode.VIDEO) {
+                targetAspect = if (sourceHeight > 0) {
+                    sourceWidth.toFloat() / sourceHeight.toFloat()
+                } else {
+                    9f / 16f
+                }
             }
 
             p.pause()
@@ -512,7 +548,11 @@ class AlignedEditorActivity : ComponentActivity() {
             resetVideoTransform()
             resetCoverTransform()
             coverCropView.targetAspect = targetAspect
-            updateAspectButtons(aspectButtons.first().first)
+            when (aspectMode) {
+                AspectMode.VIDEO -> videoAspectButton?.let(::updateAspectButtons)
+                AspectMode.IMAGE -> imageAspectButton?.let(::updateAspectButtons)
+                AspectMode.FIXED -> Unit
+            }
             updateViewportSizes()
             updateGenerateEnabled()
 
@@ -546,12 +586,17 @@ class AlignedEditorActivity : ComponentActivity() {
 
             runOnUiThread {
                 if (bmp == null) {
-                    statusText.text = "封面预览解码失败，请换一张 JPEG。"
+                    statusText.text = "封面预览解码失败，请换一张 JPEG 或 PNG。"
                     return@runOnUiThread
                 }
                 coverBitmap?.recycle()
                 coverBitmap = bmp
                 coverCropView.setBitmap(bmp)
+                if (aspectMode == AspectMode.IMAGE && bmp.height > 0) {
+                    targetAspect = bmp.width.toFloat() / bmp.height.toFloat()
+                    resetVideoTransform()
+                    imageAspectButton?.let(::updateAspectButtons)
+                }
                 coverCropView.targetAspect = targetAspect
                 resetCoverTransform()
                 updateViewportSizes()

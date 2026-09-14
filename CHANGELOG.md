@@ -6,6 +6,10 @@ The project follows semantic versioning for stable releases. Development-only co
 
 ## [Unreleased]
 
+### Added
+- Support PNG cover images; PNG covers are converted to the final JPEG primary image with transparent pixels composited on white.
+- Add an “图片” output-aspect option that uses the selected cover image’s original aspect ratio for both video export and the final Motion Photo.
+
 ### Planned
 - Continue improving preview/export alignment across more device codecs and rotation metadata.
 - Improve editing ergonomics and export diagnostics.

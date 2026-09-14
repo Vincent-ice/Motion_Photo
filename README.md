@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <strong>在 Android 上把任意 JPEG 封面与 MP4 视频制作成 Motion Photo。</strong><br>
+  <strong>在 Android 上把 JPEG / PNG 封面与 MP4 视频制作成 Motion Photo。</strong><br>
   可视化时间裁剪、比例裁剪、缩放与平移，并针对微信动态照片兼容性进行优化。
 </p>
 
@@ -18,11 +18,11 @@
 
 ## 功能
 
-- 从任意 **JPEG + MP4** 生成单文件 Android / Google Motion Photo。
+- 从 **JPEG / PNG + MP4** 生成单文件 Android / Google Motion Photo；PNG 会转换为 JPEG 主图，透明区域使用白色背景。
 - 视频时间轴可视化，支持手动设置切入点与切出点，不限制为 3 秒。
 - 视频支持实时预览的拖动、双指缩放与 1×–4× 缩放。
 - 封面支持可视化拖动、缩放与裁剪。
-- 支持原始、1:1、4:3、3:4、16:9、9:16 等输出比例。
+- 支持原始、图片原比例、1:1、4:3、3:4、16:9、9:16 等输出比例。
 - 视频与静态封面保持相同宽高比，以提升微信 Motion Photo 识别兼容性。
 - 视频导出使用 MediaCodec + OpenGL，输出 H.264；有 AAC 音轨时保留音频。
 - 生成标准 Motion Photo XMP，并清理可能冲突的旧 XMP / Extended XMP。
@@ -41,7 +41,7 @@
 1. 选择一个 MP4 视频。
 2. 在时间轴上调整切入 / 切出范围。
 3. 选择输出比例，并在视频预览中拖动或缩放取景。
-4. 选择 JPEG 封面，在封面预览中调整裁剪位置和缩放。
+4. 选择 JPEG 或 PNG 封面，可选择“图片”比例让最终输出跟随封面原比例，并调整封面裁剪位置和缩放。
 5. 点击“生成 Motion Photo”。
 6. 在系统相册或支持 Motion Photo 的应用中查看 / 分享。
 

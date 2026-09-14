@@ -38,8 +38,12 @@ object MotionPhotoGenerator {
     ): GenerateResult {
         val resolver = context.contentResolver
         val coverMime = resolver.getType(coverUri)
-        require(coverMime == null || coverMime.equals("image/jpeg", ignoreCase = true)) {
-            "当前版本只支持 JPEG 封面；当前类型：$coverMime"
+        require(
+            coverMime == null ||
+                coverMime.equals("image/jpeg", ignoreCase = true) ||
+                coverMime.equals("image/png", ignoreCase = true)
+        ) {
+            "当前版本只支持 JPEG / PNG 封面；当前类型：$coverMime"
         }
         val videoMime = resolver.getType(videoUri)
         require(videoMime == null || videoMime.startsWith("video/", ignoreCase = true)) {
@@ -73,9 +77,9 @@ object MotionPhotoGenerator {
             val videoLength = editedVideo.length()
             require(videoLength > 0L) { "编辑后的视频为空。" }
 
-            val jpegOriginal = resolver.openInputStream(coverUri)?.use { it.readBytes() }
+            val coverOriginal = resolver.openInputStream(coverUri)?.use { it.readBytes() }
                 ?: error("无法读取所选封面。")
-            val croppedCover = VideoCompat.cropCover(jpegOriginal, coverParams)
+            val croppedCover = VideoCompat.cropCover(coverOriginal, coverMime, coverParams)
 
             val xmp = buildMotionPhotoXmp(videoLength)
             val injected = JpegXmpInjector.injectMotionXmp(croppedCover, xmp)
