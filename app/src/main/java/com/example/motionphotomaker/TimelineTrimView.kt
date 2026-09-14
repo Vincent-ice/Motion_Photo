@@ -11,6 +11,7 @@ import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
 import kotlin.math.abs
+import kotlin.math.max
 
 class TimelineTrimView @JvmOverloads constructor(
     context: Context,
@@ -25,12 +26,17 @@ class TimelineTrimView @JvmOverloads constructor(
             selectedStartMs = selectedStartMs.coerceIn(0L, field)
             selectedEndMs = selectedEndMs.coerceIn(selectedStartMs, field)
             playheadMs = playheadMs.coerceIn(selectedStartMs, selectedEndMs)
+            visibleStartMs = 0L
+            visibleEndMs = field
             invalidate()
         }
 
     private var selectedStartMs: Long = 0L
     private var selectedEndMs: Long = 1L
     private var playheadMs: Long = 0L
+
+    private var visibleStartMs: Long = 0L
+    private var visibleEndMs: Long = 1L
 
     var onTrimChanged: ((Long, Long) -> Unit)? = null
     var onPlayheadChanged: ((Long, Boolean) -> Unit)? = null
@@ -40,6 +46,10 @@ class TimelineTrimView @JvmOverloads constructor(
     private val density = resources.displayMetrics.density
     private val handleWidth = 22f * density
     private val playheadWidth = 2f * density
+
+    private var downX = 0f
+    private var downEventTime = 0L
+    private var lastTapUpTime = 0L
 
     private val thumbPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val shadePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x99000000.toInt() }
@@ -54,6 +64,14 @@ class TimelineTrimView @JvmOverloads constructor(
         color = Color.WHITE
         textSize = 11f * density
     }
+    private val hintPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xCCFFFFFF.toInt()
+        textSize = 9.5f * density
+    }
+    private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0x33FFFFFF
+        strokeWidth = density
+    }
 
     fun setThumbnails(bitmaps: List<Bitmap>) {
         thumbnails.clear()
@@ -67,12 +85,19 @@ class TimelineTrimView @JvmOverloads constructor(
         selectedStartMs = s
         selectedEndMs = e
         playheadMs = playheadMs.coerceIn(s, e)
+        ensureSelectionVisible()
         invalidate()
         if (notify) onTrimChanged?.invoke(selectedStartMs, selectedEndMs)
     }
 
     fun setPlayhead(positionMs: Long) {
         playheadMs = positionMs.coerceIn(selectedStartMs, selectedEndMs)
+        invalidate()
+    }
+
+    fun resetViewport() {
+        visibleStartMs = 0L
+        visibleEndMs = durationMs
         invalidate()
     }
 
@@ -83,12 +108,23 @@ class TimelineTrimView @JvmOverloads constructor(
         if (w <= 0f || h <= 0f) return
 
         canvas.drawColor(0xFF202124.toInt())
-        if (thumbnails.isNotEmpty()) {
+
+        val visibleSpan = visibleSpanMs()
+        val zoomRatio = durationMs.toDouble() / visibleSpan.toDouble()
+        if (thumbnails.isNotEmpty() && zoomRatio <= 2.0) {
             val cellW = w / thumbnails.size
             thumbnails.forEachIndexed { index, bitmap ->
                 val dst = RectF(index * cellW, 0f, (index + 1) * cellW + 1f, h)
                 val src = centerCropSource(bitmap, dst.width() / dst.height())
                 canvas.drawBitmap(bitmap, src, dst, thumbPaint)
+            }
+        } else {
+            // In precision mode the original full-video thumbnails become misleading,
+            // so render a clean ruler instead of stretching stale frames.
+            val divisions = 8
+            for (i in 1 until divisions) {
+                val x = w * i / divisions.toFloat()
+                canvas.drawLine(x, 0f, x, h, gridPaint)
             }
         }
 
@@ -121,6 +157,11 @@ class TimelineTrimView @JvmOverloads constructor(
         canvas.drawRect(playX - playheadWidth, 0f, playX + playheadWidth, h, playheadPaint)
         canvas.drawCircle(playX, 7f * density, 5f * density, playheadPaint)
 
+        if (isZoomed()) {
+            val hint = "精调 ${format(visibleStartMs)} – ${format(visibleEndMs)} · 双击恢复全片"
+            canvas.drawText(hint, 8f * density, 13f * density, hintPaint)
+        }
+
         val label = "${format(selectedStartMs)}  –  ${format(selectedEndMs)}"
         canvas.drawText(label, 8f * density, h - 8f * density, textPaint)
     }
@@ -130,6 +171,8 @@ class TimelineTrimView @JvmOverloads constructor(
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 parent?.requestDisallowInterceptTouchEvent(true)
+                downX = x
+                downEventTime = event.eventTime
                 val startX = timeToX(selectedStartMs)
                 val endX = timeToX(selectedEndMs)
                 dragMode = when {
@@ -147,7 +190,26 @@ class TimelineTrimView @JvmOverloads constructor(
             }
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                val finishedMode = dragMode
                 updateFromTouch(x, false)
+
+                if (event.actionMasked == MotionEvent.ACTION_UP) {
+                    if (finishedMode == DragMode.START || finishedMode == DragMode.END) {
+                        autoFocusSelection()
+                    } else if (
+                        finishedMode == DragMode.PLAYHEAD &&
+                        event.eventTime - downEventTime <= 240L &&
+                        abs(x - downX) <= 10f * density
+                    ) {
+                        if (event.eventTime - lastTapUpTime <= 320L) {
+                            resetViewport()
+                            lastTapUpTime = 0L
+                        } else {
+                            lastTapUpTime = event.eventTime
+                        }
+                    }
+                }
+
                 dragMode = DragMode.NONE
                 parent?.requestDisallowInterceptTouchEvent(false)
                 return true
@@ -162,7 +224,7 @@ class TimelineTrimView @JvmOverloads constructor(
         when (dragMode) {
             DragMode.START -> {
                 selectedStartMs = t.coerceIn(
-                    0L,
+                    visibleStartMs.coerceAtLeast(0L),
                     (selectedEndMs - minGap).coerceAtLeast(0L),
                 )
                 playheadMs = playheadMs.coerceAtLeast(selectedStartMs)
@@ -173,7 +235,7 @@ class TimelineTrimView @JvmOverloads constructor(
             DragMode.END -> {
                 selectedEndMs = t.coerceIn(
                     (selectedStartMs + minGap).coerceAtMost(durationMs),
-                    durationMs,
+                    visibleEndMs.coerceAtMost(durationMs),
                 )
                 playheadMs = playheadMs.coerceAtMost(selectedEndMs)
                 onTrimChanged?.invoke(selectedStartMs, selectedEndMs)
@@ -190,11 +252,67 @@ class TimelineTrimView @JvmOverloads constructor(
         invalidate()
     }
 
-    private fun timeToX(timeMs: Long): Float =
-        width * (timeMs.toDouble() / durationMs.toDouble()).toFloat()
+    /**
+     * Progressive precision mode: once the selected interval becomes much
+     * smaller than the currently visible time window, zoom the ruler around
+     * the selection. Repeating the gesture progressively increases precision.
+     */
+    private fun autoFocusSelection() {
+        val selectionSpan = (selectedEndMs - selectedStartMs).coerceAtLeast(1L)
+        val currentSpan = visibleSpanMs()
 
-    private fun xToTime(x: Float): Long =
-        ((x / width.coerceAtLeast(1)) * durationMs).toLong().coerceIn(0L, durationMs)
+        // Keep coarse editing stable until the selection is clearly narrower.
+        if (selectionSpan.toDouble() / currentSpan.toDouble() > 0.60) return
+
+        val targetSpan = max(4_000L, selectionSpan * 3L)
+            .coerceAtMost(durationMs)
+        if (targetSpan >= (currentSpan * 0.92).toLong()) return
+
+        val center = selectedStartMs + selectionSpan / 2L
+        var newStart = center - targetSpan / 2L
+        var newEnd = newStart + targetSpan
+
+        if (newStart < 0L) {
+            newEnd -= newStart
+            newStart = 0L
+        }
+        if (newEnd > durationMs) {
+            val overflow = newEnd - durationMs
+            newStart = (newStart - overflow).coerceAtLeast(0L)
+            newEnd = durationMs
+        }
+
+        visibleStartMs = newStart
+        visibleEndMs = newEnd.coerceAtLeast(newStart + 1L)
+        ensureSelectionVisible()
+        invalidate()
+    }
+
+    private fun ensureSelectionVisible() {
+        if (selectedStartMs < visibleStartMs || selectedEndMs > visibleEndMs) {
+            visibleStartMs = 0L
+            visibleEndMs = durationMs
+        }
+    }
+
+    private fun isZoomed(): Boolean =
+        visibleStartMs > 0L || visibleEndMs < durationMs
+
+    private fun visibleSpanMs(): Long =
+        (visibleEndMs - visibleStartMs).coerceAtLeast(1L)
+
+    private fun timeToX(timeMs: Long): Float {
+        val span = visibleSpanMs().toDouble()
+        val fraction = ((timeMs - visibleStartMs).toDouble() / span).coerceIn(0.0, 1.0)
+        return width * fraction.toFloat()
+    }
+
+    private fun xToTime(x: Float): Long {
+        val fraction = x / width.coerceAtLeast(1)
+        return (
+            visibleStartMs + fraction * visibleSpanMs().toDouble()
+        ).toLong().coerceIn(visibleStartMs, visibleEndMs)
+    }
 
     private fun centerCropSource(bitmap: Bitmap, targetAspect: Float): Rect {
         val sourceAspect = bitmap.width.toFloat() / bitmap.height.toFloat()
