@@ -19,45 +19,51 @@ object MotionPhotoGenerator {
         val videoBytes: Long,
         val totalBytes: Long,
         val replacedXmpPackets: Int,
+        val videoWidth: Int,
+        val videoHeight: Int,
+        val durationUs: Long,
     )
 
     fun generate(
         context: Context,
         coverUri: Uri,
         videoUri: Uri,
-        presentationTimestampUs: Long = -1L,
     ): GenerateResult {
         val resolver = context.contentResolver
-
         val coverMime = resolver.getType(coverUri)
         require(coverMime == null || coverMime.equals("image/jpeg", ignoreCase = true)) {
-            "第一版 Demo 只支持 JPEG 封面；当前类型：$coverMime"
+            "当前版本只支持 JPEG 封面；当前类型：$coverMime"
         }
-
         val videoMime = resolver.getType(videoUri)
         require(videoMime == null || videoMime.equals("video/mp4", ignoreCase = true)) {
-            "第一版 Demo 只支持 MP4 视频；当前类型：$videoMime"
+            "当前版本只支持 MP4 视频；当前类型：$videoMime"
         }
 
-        val tempVideo = File.createTempFile("motion_photo_", ".mp4", context.cacheDir)
+        val sourceVideo = File.createTempFile("motion_photo_source_", ".mp4", context.cacheDir)
+        val compatVideo = File.createTempFile("motion_photo_compat_", ".mp4", context.cacheDir)
         var outputUri: Uri? = null
 
         try {
             resolver.openInputStream(videoUri)?.use { input ->
-                tempVideo.outputStream().buffered().use { output -> input.copyTo(output) }
+                sourceVideo.outputStream().buffered().use { output -> input.copyTo(output) }
             } ?: error("无法读取所选视频。")
+            require(sourceVideo.length() > 0) { "视频文件为空。" }
+            require(looksLikeMp4(sourceVideo)) { "视频不像有效 MP4/ISO-BMFF 文件。" }
 
-            val videoLength = tempVideo.length()
-            require(videoLength > 0) { "视频文件为空。" }
-            require(looksLikeMp4(tempVideo)) {
-                "视频不像有效 MP4/ISO-BMFF 文件：开头附近没有 ftyp box。"
-            }
+            val compatInfo = VideoCompat.remuxForWeChat(sourceVideo, compatVideo, 3_000_000L)
+            val videoLength = compatVideo.length()
+            require(videoLength > 0) { "兼容化后的视频为空。" }
 
             val jpegOriginal = resolver.openInputStream(coverUri)?.use { it.readBytes() }
                 ?: error("无法读取所选封面。")
+            val croppedCover = VideoCompat.cropCoverToVideoAspect(
+                jpegOriginal,
+                compatInfo.displayWidth,
+                compatInfo.displayHeight,
+            )
 
-            val xmp = buildMotionPhotoXmp(videoLength, presentationTimestampUs)
-            val injected = JpegXmpInjector.injectMotionXmp(jpegOriginal, xmp)
+            val xmp = buildMotionPhotoXmp(videoLength)
+            val injected = JpegXmpInjector.injectMotionXmp(croppedCover, xmp)
             val jpeg = injected.jpeg
 
             require(jpeg.size >= 2 &&
@@ -66,15 +72,11 @@ object MotionPhotoGenerator {
             ) { "内部校验失败：JPEG 没有以 EOI 结束。" }
 
             val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-            val displayName = "MOTION_${timestamp}_MP.jpg"
-
+            val displayName = "IMG_${timestamp}_MP.jpg"
             val values = ContentValues().apply {
                 put(MediaStore.Images.Media.DISPLAY_NAME, displayName)
                 put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-                put(
-                    MediaStore.Images.Media.RELATIVE_PATH,
-                    Environment.DIRECTORY_DCIM + "/MotionPhotoMaker"
-                )
+                put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_DCIM + "/MotionPhotoMaker")
                 put(MediaStore.Images.Media.IS_PENDING, 1)
             }
 
@@ -85,7 +87,7 @@ object MotionPhotoGenerator {
 
             resolver.openOutputStream(targetUri, "w")?.buffered()?.use { output ->
                 output.write(jpeg)
-                tempVideo.inputStream().buffered().use { input -> input.copyTo(output) }
+                compatVideo.inputStream().buffered().use { input -> input.copyTo(output) }
             } ?: error("无法写入生成的 Motion Photo。")
 
             values.clear()
@@ -99,38 +101,44 @@ object MotionPhotoGenerator {
                 videoBytes = videoLength,
                 totalBytes = jpeg.size.toLong() + videoLength,
                 replacedXmpPackets = injected.removedStandardXmp + injected.removedExtendedXmp,
+                videoWidth = compatInfo.displayWidth,
+                videoHeight = compatInfo.displayHeight,
+                durationUs = compatInfo.durationUs.coerceAtMost(3_000_000L),
             )
         } catch (t: Throwable) {
             outputUri?.let { resolver.delete(it, null, null) }
             throw t
         } finally {
-            tempVideo.delete()
+            sourceVideo.delete()
+            compatVideo.delete()
         }
     }
 
-    private fun buildMotionPhotoXmp(videoLength: Long, timestampUs: Long): ByteArray {
+    private fun buildMotionPhotoXmp(videoLength: Long): ByteArray {
         require(videoLength > 0)
-        val xml = """<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="MotionPhotoDemo 1.0">
-<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-<rdf:Description rdf:about=""
- xmlns:GCamera="http://ns.google.com/photos/1.0/camera/"
- xmlns:Container="http://ns.google.com/photos/1.0/container/"
- xmlns:Item="http://ns.google.com/photos/1.0/container/item/"
- GCamera:MotionPhoto="1"
- GCamera:MotionPhotoVersion="1"
- GCamera:MotionPhotoPresentationTimestampUs="$timestampUs">
- <Container:Directory>
-  <rdf:Seq>
-   <rdf:li rdf:parseType="Resource">
-    <Container:Item Item:Mime="image/jpeg" Item:Semantic="Primary" Item:Length="0" Item:Padding="0"/>
-   </rdf:li>
-   <rdf:li rdf:parseType="Resource">
-    <Container:Item Item:Mime="video/mp4" Item:Semantic="MotionPhoto" Item:Length="$videoLength" Item:Padding="0"/>
-   </rdf:li>
-  </rdf:Seq>
- </Container:Directory>
-</rdf:Description>
-</rdf:RDF>
+        val xml = """<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="MotionPhotoMaker WeChatCompat 0.2">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description rdf:about=""
+      xmlns:Camera="http://ns.google.com/photos/1.0/camera/"
+      xmlns:Container="http://ns.google.com/photos/1.0/container/"
+      xmlns:Item="http://ns.google.com/photos/1.0/container/item/"
+      Camera:ImageType="motionPhoto"
+      Camera:MotionPhoto="1"
+      Camera:MotionPhotoVersion="1"
+      Camera:MotionPhotoPresentationTimestampUs="0"
+      Container:Version="1">
+      <Container:Directory>
+        <rdf:Seq>
+          <rdf:li rdf:parseType="Resource">
+            <Container:Item Item:Semantic="Primary" Item:Mime="image/jpeg"/>
+          </rdf:li>
+          <rdf:li rdf:parseType="Resource">
+            <Container:Item Item:Semantic="MotionPhoto" Item:Mime="video/mp4" Item:Length="$videoLength"/>
+          </rdf:li>
+        </rdf:Seq>
+      </Container:Directory>
+    </rdf:Description>
+  </rdf:RDF>
 </x:xmpmeta>"""
         return xml.toByteArray(Charsets.UTF_8)
     }
