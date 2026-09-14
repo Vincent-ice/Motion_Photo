@@ -1,21 +1,36 @@
 package com.example.motionphotomaker
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.media.ExifInterface
-import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
-import android.media.MediaMuxer
+import android.net.Uri
+import android.os.Handler
+import android.os.HandlerThread
+import androidx.media3.common.Effect
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.effect.Crop
+import androidx.media3.transformer.Composition
+import androidx.media3.transformer.EditedMediaItem
+import androidx.media3.transformer.Effects
+import androidx.media3.transformer.ExportException
+import androidx.media3.transformer.ExportResult
+import androidx.media3.transformer.Transformer
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
-import java.nio.ByteBuffer
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
-import kotlin.math.max
 import kotlin.math.roundToInt
 
+@UnstableApi
 object VideoCompat {
     data class VideoInfo(
         val width: Int,
@@ -45,12 +60,8 @@ object VideoCompat {
                     videoMime = mime
                     width = format.getInteger(MediaFormat.KEY_WIDTH)
                     height = format.getInteger(MediaFormat.KEY_HEIGHT)
-                    rotation = if (format.containsKey(MediaFormat.KEY_ROTATION)) {
-                        format.getInteger(MediaFormat.KEY_ROTATION)
-                    } else 0
-                    if (format.containsKey(MediaFormat.KEY_DURATION)) {
-                        durationUs = format.getLong(MediaFormat.KEY_DURATION)
-                    }
+                    rotation = if (format.containsKey(MediaFormat.KEY_ROTATION)) format.getInteger(MediaFormat.KEY_ROTATION) else 0
+                    if (format.containsKey(MediaFormat.KEY_DURATION)) durationUs = format.getLong(MediaFormat.KEY_DURATION)
                 } else if (mime.startsWith("audio/") && audioMime == null) {
                     audioMime = mime
                 }
@@ -74,87 +85,102 @@ object VideoCompat {
         )
     }
 
-    fun remuxForWeChat(
+    /**
+     * Re-encodes the selected range with the exact visual crop used by preview.
+     * Output is forced to H.264 + AAC for broad Android/WeChat compatibility.
+     */
+    fun exportEditedForWeChat(
+        context: Context,
         input: File,
         output: File,
-        requestedStartUs: Long,
-        requestedDurationUs: Long,
+        params: VideoEditParams,
     ): VideoInfo {
-        val info = inspect(input)
-        require(info.videoMime == "video/avc") {
-            "微信兼容实验模式目前要求 H.264/AVC 视频；当前为 ${info.videoMime}。"
-        }
-        require(info.audioMime == null || info.audioMime == "audio/mp4a-latm") {
-            "微信兼容实验模式目前只接受 AAC 音频；当前为 ${info.audioMime}。"
-        }
-        require(requestedStartUs >= 0L) { "开始时间不能小于 0 秒。" }
-        require(requestedDurationUs >= 100_000L) { "动态时长至少需要 0.1 秒。" }
-        if (info.durationUs > 0) {
-            require(requestedStartUs < info.durationUs) { "开始时间已经超过视频总时长。" }
+        val sourceInfo = inspect(input)
+        require(params.startMs >= 0L) { "开始时间不能小于 0。" }
+        require(params.endMs > params.startMs) { "切出点必须晚于切入点。" }
+        if (sourceInfo.durationUs > 0L) {
+            require(params.startMs * 1000L < sourceInfo.durationUs) { "切入点已经超过原视频时长。" }
         }
 
-        val extractor = MediaExtractor()
-        extractor.setDataSource(input.absolutePath)
-        val muxer = MediaMuxer(output.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-        if (info.rotation != 0) muxer.setOrientationHint(info.rotation)
+        val endMs = if (sourceInfo.durationUs > 0L) {
+            minOf(params.endMs, sourceInfo.durationUs / 1000L)
+        } else params.endMs
 
-        val trackMap = mutableMapOf<Int, Int>()
-        var maxInputSize = 1024 * 1024
-        var muxerStarted = false
-        try {
-            for (i in 0 until extractor.trackCount) {
-                val format = extractor.getTrackFormat(i)
-                val mime = format.getString(MediaFormat.KEY_MIME) ?: continue
-                val keep = mime == "video/avc" || mime == "audio/mp4a-latm"
-                if (!keep) continue
-                extractor.selectTrack(i)
-                trackMap[i] = muxer.addTrack(format)
-                if (format.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)) {
-                    maxInputSize = max(maxInputSize, format.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE))
+        val crop = CropMath.compute(
+            sourceWidth = sourceInfo.displayWidth,
+            sourceHeight = sourceInfo.displayHeight,
+            targetAspect = params.targetAspect,
+            zoom = params.zoom,
+            panX = params.panX,
+            panY = params.panY,
+        )
+        val cropEffect: Effect = Crop(crop.left, crop.right, crop.bottom, crop.top)
+
+        val clipping = MediaItem.ClippingConfiguration.Builder()
+            .setStartPositionMs(params.startMs)
+            .setEndPositionMs(endMs)
+            .build()
+        val mediaItem = MediaItem.Builder()
+            .setUri(Uri.fromFile(input))
+            .setClippingConfiguration(clipping)
+            .build()
+        val edited = EditedMediaItem.Builder(mediaItem)
+            .setEffects(Effects(emptyList(), listOf(cropEffect)))
+            .build()
+
+        if (output.exists()) output.delete()
+        val thread = HandlerThread("motion-photo-export").apply { start() }
+        val handler = Handler(thread.looper)
+        val latch = CountDownLatch(1)
+        val failure = AtomicReference<Throwable?>(null)
+
+        val transformer = Transformer.Builder(context.applicationContext)
+            .setLooper(thread.looper)
+            .setVideoMimeType(MimeTypes.VIDEO_H264)
+            .setAudioMimeType(MimeTypes.AUDIO_AAC)
+            .setEnsureFileStartsOnVideoFrameEnabled(true)
+            .addListener(object : Transformer.Listener {
+                override fun onCompleted(composition: Composition, exportResult: ExportResult) {
+                    latch.countDown()
                 }
-            }
-            require(trackMap.isNotEmpty()) { "没有可写入的音视频轨。" }
-            muxer.start()
-            muxerStarted = true
 
-            // 无损 remux 必须从同步帧附近开始，因此手动起点会吸附到最近同步帧。
-            extractor.seekTo(requestedStartUs, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
-            val actualStartUs = extractor.sampleTime.coerceAtLeast(0L)
-            val requestedEndUs = actualStartUs + requestedDurationUs
-            val endUs = if (info.durationUs > 0) minOf(requestedEndUs, info.durationUs) else requestedEndUs
-
-            val buffer = ByteBuffer.allocateDirect(max(maxInputSize, 4 * 1024 * 1024))
-            val bufferInfo = MediaCodec.BufferInfo()
-            while (true) {
-                buffer.clear()
-                val size = extractor.readSampleData(buffer, 0)
-                if (size < 0) break
-                val inputTrack = extractor.sampleTrackIndex
-                val outputTrack = trackMap[inputTrack]
-                val sampleTime = extractor.sampleTime
-                if (sampleTime < 0 || sampleTime > endUs) break
-                if (outputTrack != null && sampleTime >= actualStartUs) {
-                    val pts = sampleTime - actualStartUs
-                    bufferInfo.set(0, size, pts.coerceAtLeast(0L), extractor.sampleFlags)
-                    muxer.writeSampleData(outputTrack, buffer, bufferInfo)
+                override fun onError(
+                    composition: Composition,
+                    exportResult: ExportResult,
+                    exportException: ExportException,
+                ) {
+                    failure.set(exportException)
+                    latch.countDown()
                 }
-                if (!extractor.advance()) break
-            }
-        } finally {
-            if (muxerStarted) runCatching { muxer.stop() }
-            muxer.release()
-            extractor.release()
+            })
+            .build()
+
+        handler.post {
+            runCatching { transformer.start(edited, output.absolutePath) }
+                .onFailure {
+                    failure.set(it)
+                    latch.countDown()
+                }
         }
-        require(output.length() > 0) { "视频兼容化失败。" }
+
+        val finished = latch.await(15, TimeUnit.MINUTES)
+        if (!finished) {
+            handler.post { runCatching { transformer.cancel() } }
+            thread.quitSafely()
+            error("视频导出超时。")
+        }
+        thread.quitSafely()
+        failure.get()?.let { throw IllegalStateException("视频导出失败：${it.message}", it) }
+        require(output.exists() && output.length() > 0L) { "视频导出结果为空。" }
         return inspect(output)
     }
 
-    fun cropCoverToVideoAspect(jpeg: ByteArray, targetWidth: Int, targetHeight: Int): ByteArray {
-        require(targetWidth > 0 && targetHeight > 0)
+    fun cropCoverToAspect(jpeg: ByteArray, targetAspect: Float): ByteArray {
+        require(targetAspect > 0f)
         val orientation = runCatching {
             ExifInterface(ByteArrayInputStream(jpeg)).getAttributeInt(
                 ExifInterface.TAG_ORIENTATION,
-                ExifInterface.ORIENTATION_NORMAL
+                ExifInterface.ORIENTATION_NORMAL,
             )
         }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
 
@@ -163,9 +189,12 @@ object VideoCompat {
         require(bounds.outWidth > 0 && bounds.outHeight > 0) { "无法解码 JPEG 封面。" }
         var sample = 1
         while (bounds.outWidth / sample > 4096 || bounds.outHeight / sample > 4096) sample *= 2
-        val opts = BitmapFactory.Options().apply { inSampleSize = sample }
-        val decoded = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, opts)
-            ?: error("无法解码 JPEG 封面。")
+        val decoded = BitmapFactory.decodeByteArray(
+            jpeg,
+            0,
+            jpeg.size,
+            BitmapFactory.Options().apply { inSampleSize = sample },
+        ) ?: error("无法解码 JPEG 封面。")
 
         val matrix = Matrix()
         when (orientation) {
@@ -183,28 +212,28 @@ object VideoCompat {
             }
         } else decoded
 
-        val targetRatio = targetWidth.toDouble() / targetHeight.toDouble()
-        val sourceRatio = oriented.width.toDouble() / oriented.height.toDouble()
+        val sourceRatio = oriented.width.toFloat() / oriented.height.toFloat()
         val cropW: Int
         val cropH: Int
         val cropX: Int
         val cropY: Int
-        if (abs(sourceRatio - targetRatio) < 0.001) {
+        if (abs(sourceRatio - targetAspect) < 0.001f) {
             cropW = oriented.width
             cropH = oriented.height
             cropX = 0
             cropY = 0
-        } else if (sourceRatio > targetRatio) {
+        } else if (sourceRatio > targetAspect) {
             cropH = oriented.height
-            cropW = (cropH * targetRatio).roundToInt().coerceAtMost(oriented.width)
+            cropW = (cropH * targetAspect).roundToInt().coerceAtMost(oriented.width)
             cropX = (oriented.width - cropW) / 2
             cropY = 0
         } else {
             cropW = oriented.width
-            cropH = (cropW / targetRatio).roundToInt().coerceAtMost(oriented.height)
+            cropH = (cropW / targetAspect).roundToInt().coerceAtMost(oriented.height)
             cropX = 0
             cropY = (oriented.height - cropH) / 2
         }
+
         val cropped = Bitmap.createBitmap(oriented, cropX, cropY, cropW, cropH)
         val out = ByteArrayOutputStream()
         require(cropped.compress(Bitmap.CompressFormat.JPEG, 95, out)) { "JPEG 封面重新编码失败。" }
