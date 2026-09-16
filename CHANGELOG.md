@@ -4,6 +4,12 @@ All notable changes to stable releases of Motion Photo Maker are documented here
 
 ## [Unreleased]
 
+### Added
+- Add a small slideshow video editor that turns multiple selected photos into an H.264 MP4 for use as the video portion of a Motion Photo.
+- Support long-press drag reordering, independent 0.5–10 second display duration for each photo, 1:1 / 16:9 / 9:16 output, preview playback and short fade-to-black transitions.
+- Support selecting a local audio file as slideshow background music; short tracks loop automatically and long tracks are clipped to the slideshow duration, with AAC audio in the exported MP4.
+- Save slideshow exports to `Movies/MotionPhotoMaker` and provide a shortcut into the single Motion Photo editor after export.
+
 ### Planned
 - Continue improving preview/export alignment across device codecs and rotation metadata.
 - Improve editing ergonomics and export diagnostics.
