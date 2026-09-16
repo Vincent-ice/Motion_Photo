@@ -18,6 +18,7 @@ android {
         targetSdk = 35
         versionCode = 20
         versionName = "0.2.0"
+        manifestPlaceholders["appLabel"] = "Motion Photo Maker"
     }
 
     signingConfigs {
@@ -32,6 +33,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            applicationIdSuffix = ".dev"
+            versionNameSuffix = "-dev"
+            manifestPlaceholders["appLabel"] = "Motion Photo Maker Dev"
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(

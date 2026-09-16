@@ -10,6 +10,9 @@ All notable changes to stable releases of Motion Photo Maker are documented here
 - Support selecting a local audio file as slideshow background music; short tracks loop automatically and long tracks are clipped to the slideshow duration, with AAC audio in the exported MP4.
 - Save slideshow exports to `Movies/MotionPhotoMaker` and provide a shortcut into the single Motion Photo editor after export.
 
+### Changed
+- Debug/development builds now use the separate package id `com.example.motionphotomaker.dev`, version suffix `-dev`, and app label `Motion Photo Maker Dev`, so they can be installed alongside the signed stable release.
+
 ### Planned
 - Continue improving preview/export alignment across device codecs and rotation metadata.
 - Improve editing ergonomics and export diagnostics.
