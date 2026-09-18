@@ -16,8 +16,8 @@ android {
         applicationId = "com.example.motionphotomaker"
         minSdk = 29
         targetSdk = 35
-        versionCode = 20
-        versionName = "0.2.0"
+        versionCode = 30
+        versionName = "0.3.0"
         manifestPlaceholders["appLabel"] = "Motion Photo Maker"
     }
 
