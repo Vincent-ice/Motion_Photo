@@ -54,8 +54,19 @@ class StudioHomeActivity : ComponentActivity() {
                 })
 
                 addView(modeCard(
+                    title = "照片幻灯片视频",
+                    subtitle = "选择多张照片，拖动排序、独立设置停留时长并添加本地配乐，导出 MP4 后可作为动态照片的视频部分。",
+                    buttonText = "进入幻灯片编辑器",
+                ) {
+                    startActivity(Intent(this@StudioHomeActivity, SlideshowEditorActivity::class.java))
+                }, LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { topMargin = dp(14) })
+
+                addView(modeCard(
                     title = "宫格动态拼图",
-                    subtitle = "把一张图片切成 4 / 6 / 9 个 1:1 方格，每格绑定一个视频，批量生成朋友圈拼图。",
+                    subtitle = "把一张图片切成 4 / 6 / 9 个 1:1 方格，每格绑定并独立编辑一个视频，批量生成朋友圈拼图。",
                     buttonText = "进入宫格模式",
                 ) {
                     startActivity(Intent(this@StudioHomeActivity, GridMotionPhotoActivity::class.java))
@@ -65,7 +76,7 @@ class StudioHomeActivity : ComponentActivity() {
                 ).apply { topMargin = dp(14) })
 
                 addView(TextView(context).apply {
-                    text = "所有处理均在本机完成。宫格模式生成的是一组独立 Motion Photo，可按左上到右下顺序一起选择发送。"
+                    text = "所有处理均在本机完成。幻灯片视频保存到 Movies/MotionPhotoMaker；宫格模式生成的是一组独立 Motion Photo。"
                     textSize = 12f
                     setTextColor(textSecondary)
                     setLineSpacing(0f, 1.2f)

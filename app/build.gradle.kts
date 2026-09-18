@@ -16,8 +16,9 @@ android {
         applicationId = "com.example.motionphotomaker"
         minSdk = 29
         targetSdk = 35
-        versionCode = 20
-        versionName = "0.2.0"
+        versionCode = 30
+        versionName = "0.3.0"
+        manifestPlaceholders["appLabel"] = "Motion Photo Maker"
     }
 
     signingConfigs {
@@ -32,6 +33,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            applicationIdSuffix = ".dev"
+            versionNameSuffix = "-dev"
+            manifestPlaceholders["appLabel"] = "Motion Photo Maker Dev"
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(
@@ -55,8 +61,11 @@ dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.activity:activity-ktx:1.10.1")
+    implementation("androidx.recyclerview:recyclerview:1.4.0")
 
     val media3Version = "1.11.0"
     implementation("androidx.media3:media3-common:$media3Version")
     implementation("androidx.media3:media3-exoplayer:$media3Version")
+    implementation("androidx.media3:media3-transformer:$media3Version")
+    implementation("androidx.media3:media3-effect:$media3Version")
 }

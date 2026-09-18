@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-This document records the directly declared libraries and build tools used by Motion Photo Maker v0.1.0.
+This document records the directly declared libraries and build tools used by Motion Photo Maker.
 
 ## License decision
 
@@ -15,8 +15,11 @@ The project's direct Android/Kotlin dependencies are Apache License 2.0 componen
 | AndroidX Core KTX | 1.15.0 | Apache-2.0 | Runtime dependency |
 | AndroidX AppCompat | 1.7.0 | Apache-2.0 | Runtime dependency |
 | AndroidX Activity KTX | 1.10.1 | Apache-2.0 | Runtime dependency |
+| AndroidX RecyclerView | 1.4.0 | Apache-2.0 | Slideshow image ordering UI |
 | AndroidX Media3 Common | 1.11.0 | Apache-2.0 | Runtime dependency |
-| AndroidX Media3 ExoPlayer | 1.11.0 | Apache-2.0 | Runtime dependency |
+| AndroidX Media3 ExoPlayer | 1.11.0 | Apache-2.0 | Video preview |
+| AndroidX Media3 Transformer | 1.11.0 | Apache-2.0 | Slideshow image/audio composition and MP4 export |
+| AndroidX Media3 Effect | 1.11.0 | Apache-2.0 | Slideshow crop/presentation and transition effects |
 
 ## Build toolchain
 

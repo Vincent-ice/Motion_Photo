@@ -8,6 +8,23 @@ All notable changes to stable releases of Motion Photo Maker are documented here
 - Continue improving preview/export alignment across device codecs and rotation metadata.
 - Improve editing ergonomics and export diagnostics.
 
+## [0.3.0] - 2026-09-18
+
+### Added
+- Add a small slideshow video editor that turns multiple selected photos into an H.264 MP4 for use as the video portion of a Motion Photo.
+- Support long-press drag reordering, independent 0.5–10 second display duration for each photo, 1:1 / 16:9 / 9:16 output, preview playback and short fade-to-black transitions.
+- Support selecting a local audio file as slideshow background music; short tracks loop automatically and long tracks are clipped to the slideshow duration, with AAC audio in the exported MP4.
+- Save slideshow exports to `Movies/MotionPhotoMaker` and provide a shortcut into the single Motion Photo editor after export.
+- Add independent 1x–4x zoom and pan framing for every slideshow photo; drag/pinch edits are preserved per photo and rendered with the same CropMath during export.
+
+### Changed
+- Debug/development builds now use the separate package id `com.example.motionphotomaker.dev`, version suffix `-dev`, and app label `Motion Photo Maker Dev`, so they can be installed alongside the signed stable release.
+- Slideshow editing now uses high-resolution source decoding for the main preview while keeping lightweight MediaStore thumbnails in the photo strip.
+
+### Fixed
+- Slideshow exports now write the current MediaStore taken/added/modified timestamps so new videos no longer appear as dated 2005-01-23 in gallery sorting.
+- Slideshow preview no longer remains visibly low-resolution when editing or zooming high-resolution source photos.
+
 ## [0.2.0] - 2026-09-14
 
 ### Added
@@ -47,5 +64,6 @@ All notable changes to stable releases of Motion Photo Maker are documented here
 - Live video pan/zoom preview being overwritten by ExoPlayer transforms.
 - Duplicate video preview transforms that caused preview/export mismatch.
 
+[0.3.0]: https://github.com/Vincent-ice/Motion_Photo/releases/tag/v0.3.0
 [0.2.0]: https://github.com/Vincent-ice/Motion_Photo/releases/tag/v0.2.0
 [0.1.0]: https://github.com/Vincent-ice/Motion_Photo/releases/tag/v0.1.0
