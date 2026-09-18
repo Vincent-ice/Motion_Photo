@@ -310,7 +310,7 @@ class SlideshowExporter(private val context: Context) {
         val resolver = context.contentResolver
         val nowMs = System.currentTimeMillis()
         val nowSeconds = nowMs / 1000L
-        val displayName = "SLIDESHOW_$nowMs_${width}x$height.mp4"
+        val displayName = "SLIDESHOW_${nowMs}_${width}x${height}.mp4"
 
         val values = ContentValues().apply {
             put(MediaStore.Video.Media.DISPLAY_NAME, displayName)
