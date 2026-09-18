@@ -41,7 +41,13 @@ class SlideshowEditorActivity : ComponentActivity() {
     private val textSecondary = Color.rgb(174, 178, 188)
     private val accent = Color.rgb(255, 196, 46)
 
-    private data class SlideItem(val uri: Uri, var durationMs: Long = 2_000L)
+    private data class SlideItem(
+        val uri: Uri,
+        var durationMs: Long = 2_000L,
+        var zoom: Float = 1f,
+        var panX: Float = 0f,
+        var panY: Float = 0f,
+    )
 
     private val slides = mutableListOf<SlideItem>()
     private var selectedIndex = -1
@@ -60,11 +66,13 @@ class SlideshowEditorActivity : ComponentActivity() {
     private var previewIndex = 0
 
     private lateinit var previewFrame: FrameLayout
-    private lateinit var previewImage: ImageView
+    private lateinit var previewImage: CoverCropView
     private lateinit var recycler: RecyclerView
     private lateinit var adapter: SlideAdapter
     private lateinit var durationSeek: SeekBar
     private lateinit var durationText: TextView
+    private lateinit var imageZoomSeek: SeekBar
+    private lateinit var imageTransformText: TextView
     private lateinit var summaryText: TextView
     private lateinit var musicText: TextView
     private lateinit var previewButton: Button
@@ -137,9 +145,20 @@ class SlideshowEditorActivity : ComponentActivity() {
             setBackgroundColor(Color.BLACK)
             clipChildren = true
         }
-        previewImage = ImageView(this).apply {
-            scaleType = ImageView.ScaleType.CENTER_CROP
-            setBackgroundColor(Color.BLACK)
+        previewImage = CoverCropView(this).apply {
+            targetAspect = outputWidth.toFloat() / outputHeight.toFloat()
+            showGrid = true
+            onTransformChanged = { zoom, panX, panY ->
+                if (!previewing && selectedIndex in slides.indices) {
+                    slides[selectedIndex].zoom = zoom
+                    slides[selectedIndex].panX = panX
+                    slides[selectedIndex].panY = panY
+                    if (::imageZoomSeek.isInitialized) {
+                        imageZoomSeek.progress = ((zoom - 1f) * 100f).roundToInt().coerceIn(0, 300)
+                    }
+                    if (::imageTransformText.isInitialized) updateImageTransformText()
+                }
+            }
         }
         previewFrame.addView(
             previewImage,
@@ -168,6 +187,7 @@ class SlideshowEditorActivity : ComponentActivity() {
             LinearLayout.LayoutParams(0, dp(46), 1f),
         )
         previewCard.addView(previewRow)
+        previewCard.addView(label("编辑状态下：单指拖动图片，双指缩放，双击恢复。每张照片独立保存取景。", 11f))
         root.addView(previewCard)
 
         root.addView(sectionTitle("图片顺序与时长"))
@@ -225,9 +245,44 @@ class SlideshowEditorActivity : ComponentActivity() {
             })
         }
         slidesCard.addView(durationSeek)
+
+        imageTransformText = label("图片取景：1.00× · X +0% · Y +0%", 12f)
+        slidesCard.addView(imageTransformText)
+        imageZoomSeek = SeekBar(this).apply {
+            max = 300
+            progress = 0
+            isEnabled = false
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (!fromUser || selectedIndex !in slides.indices) return
+                    val item = slides[selectedIndex]
+                    item.zoom = 1f + progress / 100f
+                    previewImage.setTransform(item.zoom, item.panX, item.panY)
+                    updateImageTransformText()
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+            })
+        }
+        slidesCard.addView(imageZoomSeek)
+        slidesCard.addView(
+            secondaryButton("重置当前图片取景").apply {
+                setOnClickListener {
+                    val item = slides.getOrNull(selectedIndex) ?: return@setOnClickListener
+                    item.zoom = 1f
+                    item.panX = 0f
+                    item.panY = 0f
+                    imageZoomSeek.progress = 0
+                    previewImage.setTransform(1f, 0f, 0f)
+                    updateImageTransformText()
+                }
+            },
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42)).apply { topMargin = dp(4) },
+        )
+
         summaryText = label("尚未选择图片", 12f)
         slidesCard.addView(summaryText)
-        slidesCard.addView(label("长按缩略图左右拖动排序；每张可设置 0.5–10.0 秒。", 11f))
+        slidesCard.addView(label("长按缩略图左右拖动排序；每张可设置 0.5–10.0 秒，并保存独立缩放/位置。", 11f))
         root.addView(slidesCard)
 
         root.addView(sectionTitle("配乐"))
@@ -343,6 +398,10 @@ class SlideshowEditorActivity : ComponentActivity() {
         mediaPlayer?.release()
         mediaPlayer = null
         if (::previewButton.isInitialized) previewButton.text = "播放预览"
+        if (::previewImage.isInitialized) {
+            previewImage.showGrid = true
+            showSelectedInPreview()
+        }
     }
 
     private fun startPreviewMusic() {
@@ -364,8 +423,28 @@ class SlideshowEditorActivity : ComponentActivity() {
         val item = slides.getOrNull(index) ?: return
         previewImage.animate().cancel()
         previewImage.alpha = if (animate && fadeEnabled) 0.15f else 1f
-        previewImage.setImageURI(item.uri)
-        if (animate && fadeEnabled) previewImage.animate().alpha(1f).setDuration(180L).start()
+        previewImage.showGrid = !previewing
+        previewImage.targetAspect = outputWidth.toFloat() / outputHeight.toFloat()
+        previewImage.setTransform(item.zoom, item.panX, item.panY)
+
+        val token = "$index:${item.uri}:${System.nanoTime()}"
+        previewImage.tag = token
+        previewImage.setBitmap(null)
+        thumbWorker.execute {
+            val bitmap = runCatching {
+                contentResolver.loadThumbnail(item.uri, Size(1800, 1800), null)
+            }.getOrNull()
+            previewImage.post {
+                if (previewImage.tag == token && bitmap != null) {
+                    previewImage.setBitmap(bitmap)
+                    if (animate && fadeEnabled) {
+                        previewImage.animate().alpha(1f).setDuration(180L).start()
+                    } else {
+                        previewImage.alpha = 1f
+                    }
+                }
+            }
+        }
     }
 
     private fun showSelectedInPreview() {
@@ -377,12 +456,25 @@ class SlideshowEditorActivity : ComponentActivity() {
     private fun updateSelectionUi() {
         val item = slides.getOrNull(selectedIndex)
         durationSeek.isEnabled = item != null
+        imageZoomSeek.isEnabled = item != null
         if (item == null) {
             durationText.text = "选择一张图片后调整停留时长"
+            imageTransformText.text = "图片取景：未选择"
             return
         }
         durationSeek.progress = ((item.durationMs - 500L) / 100L).toInt().coerceIn(0, 95)
+        imageZoomSeek.progress = ((item.zoom - 1f) * 100f).roundToInt().coerceIn(0, 300)
         durationText.text = "第 ${selectedIndex + 1} 张：${"%.1f".format(item.durationMs / 1000.0)} 秒"
+        updateImageTransformText()
+    }
+
+    private fun updateImageTransformText() {
+        val item = slides.getOrNull(selectedIndex)
+        imageTransformText.text = if (item == null) {
+            "图片取景：未选择"
+        } else {
+            "图片取景：${"%.2f".format(item.zoom)}× · X ${"%+.0f".format(item.panX * 100)}% · Y ${"%+.0f".format(item.panY * 100)}%"
+        }
     }
 
     private fun updateSummary() {
@@ -415,6 +507,8 @@ class SlideshowEditorActivity : ComponentActivity() {
             previewFrame.layoutParams = LinearLayout.LayoutParams(width, height).apply {
                 gravity = Gravity.CENTER_HORIZONTAL
             }
+            previewImage.targetAspect = outputWidth.toFloat() / outputHeight.toFloat()
+            if (!previewing) showSelectedInPreview()
             updateSummary()
         }
     }
@@ -429,7 +523,7 @@ class SlideshowEditorActivity : ComponentActivity() {
         statusText.text = "正在生成 ${slides.size} 张照片的幻灯片视频…"
 
         val spec = SlideshowExportSpec(
-            frames = slides.map { SlideshowFrame(it.uri, it.durationMs) },
+            frames = slides.map { SlideshowFrame(it.uri, it.durationMs, it.zoom, it.panX, it.panY) },
             musicUri = musicUri,
             width = outputWidth,
             height = outputHeight,
@@ -538,6 +632,7 @@ class SlideshowEditorActivity : ComponentActivity() {
                 }
             }
             holder.itemView.setOnClickListener {
+                stopPreview()
                 val old = selectedIndex
                 selectedIndex = holder.bindingAdapterPosition
                 if (old >= 0) notifyItemChanged(old)

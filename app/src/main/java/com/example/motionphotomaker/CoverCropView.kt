@@ -35,6 +35,12 @@ class CoverCropView @JvmOverloads constructor(
             invalidate()
         }
 
+    var showGrid: Boolean = true
+        set(value) {
+            field = value
+            invalidate()
+        }
+
     var onTransformChanged: ((zoom: Float, panX: Float, panY: Float) -> Unit)? = null
 
     private var bitmap: Bitmap? = null
@@ -120,11 +126,13 @@ class CoverCropView @JvmOverloads constructor(
         val w = width.toFloat()
         val h = height.toFloat()
         if (w <= 0f || h <= 0f) return
-        canvas.drawLine(w / 3f, 0f, w / 3f, h, gridPaint)
-        canvas.drawLine(w * 2f / 3f, 0f, w * 2f / 3f, h, gridPaint)
-        canvas.drawLine(0f, h / 3f, w, h / 3f, gridPaint)
-        canvas.drawLine(0f, h * 2f / 3f, w, h * 2f / 3f, gridPaint)
-        canvas.drawRect(0.75f, 0.75f, w - 0.75f, h - 0.75f, borderPaint)
+        if (showGrid) {
+            canvas.drawLine(w / 3f, 0f, w / 3f, h, gridPaint)
+            canvas.drawLine(w * 2f / 3f, 0f, w * 2f / 3f, h, gridPaint)
+            canvas.drawLine(0f, h / 3f, w, h / 3f, gridPaint)
+            canvas.drawLine(0f, h * 2f / 3f, w, h * 2f / 3f, gridPaint)
+            canvas.drawRect(0.75f, 0.75f, w - 0.75f, h - 0.75f, borderPaint)
+        }
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {

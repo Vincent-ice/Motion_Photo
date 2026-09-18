@@ -4,14 +4,21 @@ package com.example.motionphotomaker
 
 import android.content.ContentValues
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.ImageDecoder
+import android.graphics.Paint
+import android.graphics.RectF
 import android.net.Uri
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.provider.MediaStore
 import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.effect.Brightness
-import androidx.media3.effect.Presentation
 import androidx.media3.effect.TimestampWrapper
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.EditedMediaItem
@@ -22,13 +29,20 @@ import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.Transformer
 import java.io.File
 import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.util.concurrent.Executors
+import kotlin.math.ceil
+import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 /** One still frame in a slideshow project. */
 data class SlideshowFrame(
     val uri: Uri,
     val durationMs: Long,
+    val zoom: Float = 1f,
+    val panX: Float = 0f,
+    val panY: Float = 0f,
 )
 
 data class SlideshowExportSpec(
@@ -41,14 +55,20 @@ data class SlideshowExportSpec(
 
 /**
  * Exports still images as a H.264/AAC MP4 using Media3 Composition.
- * Image durations are independent, background music loops (or is clipped)
- * to the slideshow duration, and every image is center-cropped to the same
- * output frame used by the preview.
+ *
+ * Every source image is first rendered through CropMath into an exact-size
+ * temporary JPEG. The preview uses the same CropMath state, so per-slide
+ * zoom/pan is deterministic and does not depend on Media3 effect coordinates.
  */
 class SlideshowExporter(private val context: Context) {
     private val io = Executors.newSingleThreadExecutor()
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    @Volatile private var busy = false
+    @Volatile private var cancelled = false
     private var transformer: Transformer? = null
     private var tempFile: File? = null
+    private var preparedDir: File? = null
 
     fun export(
         spec: SlideshowExportSpec,
@@ -57,25 +77,60 @@ class SlideshowExporter(private val context: Context) {
     ) {
         require(spec.frames.isNotEmpty()) { "至少需要一张图片。" }
         require(spec.width > 0 && spec.height > 0) { "无效输出尺寸。" }
-        check(transformer == null) { "已有导出任务正在运行。" }
+        check(!busy) { "已有导出任务正在运行。" }
+
+        busy = true
+        cancelled = false
 
         val file = File(context.cacheDir, "slideshow_${System.currentTimeMillis()}.mp4")
         if (file.exists()) file.delete()
         tempFile = file
 
-        val presentation = Presentation.createForWidthAndHeight(
-            spec.width,
-            spec.height,
-            Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP,
-        )
+        val frameDir = File(context.cacheDir, "slideshow_frames_${System.currentTimeMillis()}").apply {
+            deleteRecursively()
+            mkdirs()
+        }
+        preparedDir = frameDir
 
-        val videoItems = spec.frames.map { frame ->
+        io.execute {
+            try {
+                val preparedUris = spec.frames.mapIndexed { index, frame ->
+                    check(!cancelled) { "导出已取消。" }
+                    Uri.fromFile(prepareFrame(frame, index, spec.width, spec.height, frameDir))
+                }
+
+                mainHandler.post {
+                    if (cancelled) {
+                        finishCleanup(file, frameDir)
+                        busy = false
+                        return@post
+                    }
+                    startTransformer(spec, preparedUris, file, frameDir, onCompleted, onError)
+                }
+            } catch (t: Throwable) {
+                finishCleanup(file, frameDir)
+                busy = false
+                if (!cancelled) mainHandler.post { onError(t) }
+            }
+        }
+    }
+
+    private fun startTransformer(
+        spec: SlideshowExportSpec,
+        preparedUris: List<Uri>,
+        outputFile: File,
+        frameDir: File,
+        onCompleted: (Uri) -> Unit,
+        onError: (Throwable) -> Unit,
+    ) {
+        val videoItems = preparedUris.mapIndexed { index, uri ->
+            val frame = spec.frames[index]
             val durationMs = frame.durationMs.coerceIn(500L, 10_000L)
-            val effects = mutableListOf<Effect>(presentation)
+            val effects = mutableListOf<Effect>()
             if (spec.fadeEnabled) effects += fadeToBlackEffects(durationMs)
 
             val item = MediaItem.Builder()
-                .setUri(frame.uri)
+                .setUri(uri)
                 .setImageDurationMs(durationMs)
                 .build()
 
@@ -104,14 +159,14 @@ class SlideshowExporter(private val context: Context) {
                 transformer = null
                 io.execute {
                     try {
-                        val uri = publishVideo(file, spec.width, spec.height)
-                        file.delete()
-                        tempFile = null
-                        android.os.Handler(context.mainLooper).post { onCompleted(uri) }
+                        val uri = publishVideo(outputFile, spec.width, spec.height)
+                        finishCleanup(outputFile, frameDir)
+                        busy = false
+                        mainHandler.post { onCompleted(uri) }
                     } catch (t: Throwable) {
-                        file.delete()
-                        tempFile = null
-                        android.os.Handler(context.mainLooper).post { onError(t) }
+                        finishCleanup(outputFile, frameDir)
+                        busy = false
+                        mainHandler.post { onError(t) }
                     }
                 }
             }
@@ -122,8 +177,8 @@ class SlideshowExporter(private val context: Context) {
                 exportException: ExportException,
             ) {
                 transformer = null
-                file.delete()
-                tempFile = null
+                busy = false
+                finishCleanup(outputFile, frameDir)
                 onError(exportException)
             }
         }
@@ -135,16 +190,85 @@ class SlideshowExporter(private val context: Context) {
         if (spec.musicUri != null) {
             builder.setAudioMimeType(MimeTypes.AUDIO_AAC)
         }
-        transformer = builder.build()
 
-        transformer!!.start(composition, file.absolutePath)
+        transformer = builder.build()
+        transformer!!.start(composition, outputFile.absolutePath)
+    }
+
+    private fun prepareFrame(
+        frame: SlideshowFrame,
+        index: Int,
+        outputWidth: Int,
+        outputHeight: Int,
+        directory: File,
+    ): File {
+        val source = decodeForExport(frame.uri, outputWidth, outputHeight, frame.zoom)
+        try {
+            val targetAspect = outputWidth.toFloat() / outputHeight.toFloat()
+            val crop = CropMath.computePixels(
+                sourceWidth = source.width,
+                sourceHeight = source.height,
+                targetAspect = targetAspect,
+                zoom = frame.zoom,
+                panX = frame.panX,
+                panY = frame.panY,
+            )
+
+            val rendered = Bitmap.createBitmap(outputWidth, outputHeight, Bitmap.Config.ARGB_8888)
+            try {
+                val canvas = Canvas(rendered)
+                canvas.drawColor(Color.BLACK)
+                canvas.drawBitmap(
+                    source,
+                    RectF(crop.left, crop.top, crop.right, crop.bottom),
+                    RectF(0f, 0f, outputWidth.toFloat(), outputHeight.toFloat()),
+                    Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG),
+                )
+
+                val output = File(directory, "frame_${"%03d".format(index)}.jpg")
+                FileOutputStream(output).use { stream ->
+                    check(rendered.compress(Bitmap.CompressFormat.JPEG, 95, stream)) {
+                        "无法编码第 ${index + 1} 张图片。"
+                    }
+                }
+                return output
+            } finally {
+                rendered.recycle()
+            }
+        } finally {
+            source.recycle()
+        }
+    }
+
+    private fun decodeForExport(
+        uri: Uri,
+        outputWidth: Int,
+        outputHeight: Int,
+        zoom: Float,
+    ): Bitmap {
+        val imageSource = ImageDecoder.createSource(context.contentResolver, uri)
+        return ImageDecoder.decodeBitmap(imageSource) { decoder, info, _ ->
+            decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+            val sourceMax = max(info.size.width, info.size.height).coerceAtLeast(1)
+            val requestedMax = (
+                max(outputWidth, outputHeight) * zoom.coerceIn(1f, 4f) * 1.15f
+            ).roundToInt().coerceIn(max(outputWidth, outputHeight), 4096)
+            val sample = ceil(sourceMax.toDouble() / requestedMax.toDouble())
+                .toInt()
+                .coerceAtLeast(1)
+            decoder.setTargetSampleSize(sample)
+        }
     }
 
     fun cancel() {
+        cancelled = true
         transformer?.cancel()
         transformer = null
+        busy = false
         tempFile?.delete()
         tempFile = null
+        preparedDir?.deleteRecursively()
+        preparedDir = null
     }
 
     fun release() {
@@ -152,11 +276,13 @@ class SlideshowExporter(private val context: Context) {
         io.shutdownNow()
     }
 
-    /**
-     * Media3 does not currently provide cross-fades between Composition items.
-     * This implements a short stepped fade-to-black at each still's edges,
-     * which keeps export/preview behavior deterministic without overlapping clips.
-     */
+    private fun finishCleanup(outputFile: File, frameDir: File) {
+        outputFile.delete()
+        frameDir.deleteRecursively()
+        if (tempFile == outputFile) tempFile = null
+        if (preparedDir == frameDir) preparedDir = null
+    }
+
     private fun fadeToBlackEffects(durationMs: Long): List<Effect> {
         val fadeMs = min(240L, durationMs / 5L)
         if (fadeMs < 80L) return emptyList()
@@ -182,7 +308,10 @@ class SlideshowExporter(private val context: Context) {
 
     private fun publishVideo(source: File, width: Int, height: Int): Uri {
         val resolver = context.contentResolver
-        val displayName = "SLIDESHOW_${System.currentTimeMillis()}_${width}x${height}.mp4"
+        val nowMs = System.currentTimeMillis()
+        val nowSeconds = nowMs / 1000L
+        val displayName = "SLIDESHOW_$nowMs_${width}x$height.mp4"
+
         val values = ContentValues().apply {
             put(MediaStore.Video.Media.DISPLAY_NAME, displayName)
             put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
@@ -190,8 +319,16 @@ class SlideshowExporter(private val context: Context) {
                 MediaStore.Video.Media.RELATIVE_PATH,
                 Environment.DIRECTORY_MOVIES + "/MotionPhotoMaker",
             )
+            // Some gallery apps prefer DATE_TAKEN while others sort by
+            // DATE_ADDED / DATE_MODIFIED. Set all three explicitly so an
+            // encoder/container timestamp cannot make a fresh slideshow look
+            // like it was created in 2005.
+            put(MediaStore.Video.Media.DATE_TAKEN, nowMs)
+            put(MediaStore.MediaColumns.DATE_ADDED, nowSeconds)
+            put(MediaStore.MediaColumns.DATE_MODIFIED, nowSeconds)
             put(MediaStore.Video.Media.IS_PENDING, 1)
         }
+
         val uri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
             ?: error("无法创建视频媒体文件。")
         try {
@@ -200,7 +337,12 @@ class SlideshowExporter(private val context: Context) {
             } ?: error("无法写入视频文件。")
             resolver.update(
                 uri,
-                ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) },
+                ContentValues().apply {
+                    put(MediaStore.Video.Media.DATE_TAKEN, nowMs)
+                    put(MediaStore.MediaColumns.DATE_ADDED, nowSeconds)
+                    put(MediaStore.MediaColumns.DATE_MODIFIED, nowSeconds)
+                    put(MediaStore.Video.Media.IS_PENDING, 0)
+                },
                 null,
                 null,
             )

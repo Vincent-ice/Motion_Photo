@@ -10,6 +10,12 @@ All notable changes to stable releases of Motion Photo Maker are documented here
 - Support selecting a local audio file as slideshow background music; short tracks loop automatically and long tracks are clipped to the slideshow duration, with AAC audio in the exported MP4.
 - Save slideshow exports to `Movies/MotionPhotoMaker` and provide a shortcut into the single Motion Photo editor after export.
 
+### Fixed
+- Slideshow exports now write the current MediaStore taken/added/modified timestamps so new videos no longer appear as dated 2005-01-23 in gallery sorting.
+
+### Added
+- Each slideshow photo now has independent 1x–4x zoom and pan framing; drag/pinch edits are preserved per photo and rendered with the same CropMath during export.
+
 ### Changed
 - Debug/development builds now use the separate package id `com.example.motionphotomaker.dev`, version suffix `-dev`, and app label `Motion Photo Maker Dev`, so they can be installed alongside the signed stable release.
 
