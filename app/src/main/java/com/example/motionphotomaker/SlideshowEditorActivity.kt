@@ -1,7 +1,9 @@
 package com.example.motionphotomaker
 
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.ImageDecoder
 import android.graphics.drawable.GradientDrawable
 import android.media.MediaPlayer
 import android.net.Uri
@@ -31,6 +33,8 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import java.util.Collections
 import java.util.concurrent.Executors
+import java.util.concurrent.Future
+import kotlin.math.max
 import kotlin.math.roundToInt
 
 class SlideshowEditorActivity : ComponentActivity() {
@@ -60,6 +64,9 @@ class SlideshowEditorActivity : ComponentActivity() {
 
     private val handler = Handler(Looper.getMainLooper())
     private val thumbWorker = Executors.newFixedThreadPool(2)
+    private val previewWorker = Executors.newSingleThreadExecutor()
+    private var previewFuture: Future<*>? = null
+    private var previewBitmap: Bitmap? = null
     private lateinit var exporter: SlideshowExporter
     private var mediaPlayer: MediaPlayer? = null
     private var previewing = false
@@ -429,21 +436,67 @@ class SlideshowEditorActivity : ComponentActivity() {
 
         val token = "$index:${item.uri}:${System.nanoTime()}"
         previewImage.tag = token
-        previewImage.setBitmap(null)
+        previewFuture?.cancel(true)
+
+        // Show a cached system thumbnail immediately, then replace it with a
+        // high-resolution decode from the original image. loadThumbnail() may
+        // return a much smaller cached bitmap than requested on some devices.
         thumbWorker.execute {
-            val bitmap = runCatching {
-                contentResolver.loadThumbnail(item.uri, Size(1800, 1800), null)
+            val thumbnail = runCatching {
+                contentResolver.loadThumbnail(item.uri, Size(720, 720), null)
             }.getOrNull()
             previewImage.post {
-                if (previewImage.tag == token && bitmap != null) {
-                    previewImage.setBitmap(bitmap)
-                    if (animate && fadeEnabled) {
-                        previewImage.animate().alpha(1f).setDuration(180L).start()
-                    } else {
-                        previewImage.alpha = 1f
-                    }
+                if (previewImage.tag == token && thumbnail != null) {
+                    val old = previewBitmap
+                    previewBitmap = null
+                    previewImage.setBitmap(thumbnail)
+                    if (old != null && old !== thumbnail && !old.isRecycled) old.recycle()
                 }
             }
+        }
+
+        val frameWidth = previewFrame.width.coerceAtLeast(resources.displayMetrics.widthPixels - dp(56))
+        val frameHeight = previewFrame.height.coerceAtLeast(dp(360))
+        val requestedLongEdge = (max(frameWidth, frameHeight) * 4).coerceIn(1600, 4096)
+
+        previewFuture = previewWorker.submit {
+            val bitmap = runCatching {
+                decodePreviewBitmap(item.uri, requestedLongEdge)
+            }.getOrNull()
+            if (bitmap == null) return@submit
+
+            previewImage.post {
+                if (previewImage.tag != token) {
+                    bitmap.recycle()
+                    return@post
+                }
+                val old = previewBitmap
+                previewBitmap = bitmap
+                previewImage.setBitmap(bitmap)
+                if (old != null && old !== bitmap && !old.isRecycled) old.recycle()
+                if (animate && fadeEnabled) {
+                    previewImage.animate().alpha(1f).setDuration(180L).start()
+                } else {
+                    previewImage.alpha = 1f
+                }
+            }
+        }
+    }
+
+    private fun decodePreviewBitmap(uri: Uri, requestedLongEdge: Int): Bitmap {
+        val source = ImageDecoder.createSource(contentResolver, uri)
+        return ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
+            val sourceWidth = info.size.width.coerceAtLeast(1)
+            val sourceHeight = info.size.height.coerceAtLeast(1)
+            val sourceLongEdge = max(sourceWidth, sourceHeight)
+            if (sourceLongEdge > requestedLongEdge) {
+                val scale = requestedLongEdge.toFloat() / sourceLongEdge.toFloat()
+                decoder.setTargetSize(
+                    (sourceWidth * scale).roundToInt().coerceAtLeast(1),
+                    (sourceHeight * scale).roundToInt().coerceAtLeast(1),
+                )
+            }
+            decoder.allocator = ImageDecoder.ALLOCATOR_HARDWARE
         }
     }
 
@@ -589,6 +642,10 @@ class SlideshowEditorActivity : ComponentActivity() {
 
     override fun onDestroy() {
         stopPreview()
+        previewFuture?.cancel(true)
+        previewWorker.shutdownNow()
+        previewBitmap?.let { if (!it.isRecycled) it.recycle() }
+        previewBitmap = null
         exporter.release()
         thumbWorker.shutdownNow()
         super.onDestroy()

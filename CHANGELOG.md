@@ -11,6 +11,7 @@ All notable changes to stable releases of Motion Photo Maker are documented here
 - Save slideshow exports to `Movies/MotionPhotoMaker` and provide a shortcut into the single Motion Photo editor after export.
 
 ### Fixed
+- Slideshow preview now decodes a high-resolution display bitmap from the original photo instead of relying on MediaStore thumbnails, keeping 1x–4x framing sharp while editing.
 - Slideshow exports now write the current MediaStore taken/added/modified timestamps so new videos no longer appear as dated 2005-01-23 in gallery sorting.
 
 ### Added
